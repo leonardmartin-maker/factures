@@ -18,8 +18,6 @@ button, input, select, textarea { font: inherit; }
 
 /* ===== APP SHELL ===== */
 .app-shell {
-  display: grid;
-  grid-template-columns: 260px 1fr;
   min-height: 100vh;
 }
 
@@ -167,8 +165,11 @@ button, input, select, textarea { font: inherit; }
   margin-left: 260px;
   padding: 28px 32px 48px;
   min-height: 100vh;
-  max-width: calc(100vw - 260px);
-  overflow-x: hidden;
+  width: calc(100% - 260px);
+}
+
+.main-content > .stack {
+  max-width: 1100px;
 }
 
 .page-header {
