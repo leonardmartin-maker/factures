@@ -26,9 +26,24 @@ const categories = Object.keys(CATEGORY_LABELS);
 const statuses = Object.keys(STATUS_LABELS);
 const sources = ["PDF", "SCAN", "EMAIL", "MANUEL"];
 
+const CURRENCIES = [
+  { code: "CHF", label: "CHF - Franc suisse", locale: "fr-CH" },
+  { code: "EUR", label: "EUR - Euro", locale: "fr-FR" },
+  { code: "USD", label: "USD - Dollar US", locale: "en-US" },
+  { code: "GBP", label: "GBP - Livre sterling", locale: "en-GB" },
+];
+
 type Tab = "dashboard" | "factures" | "nouvelle" | "budget" | "fournisseurs" | "audit";
 
-function fmt(v: number) { return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(v); }
+function getSavedCurrency(): string {
+  if (typeof window === "undefined") return "CHF";
+  return localStorage.getItem("factures_currency") ?? "CHF";
+}
+
+function makeFmt(currencyCode: string) {
+  const curr = CURRENCIES.find((c) => c.code === currencyCode) ?? CURRENCIES[0];
+  return (v: number) => new Intl.NumberFormat(curr.locale, { style: "currency", currency: curr.code }).format(v);
+}
 function fmtDate(v: string | null) {
   if (!v) return "-";
   return new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(v));
@@ -42,6 +57,13 @@ export default function DashboardClient({ initialData, session }: { initialData:
   const [data, setData] = useState(initialData);
   const [tab, setTab] = useState<Tab>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [currency, setCurrency] = useState(getSavedCurrency);
+  const fmt = useMemo(() => makeFmt(currency), [currency]);
+
+  const handleCurrencyChange = (code: string) => {
+    setCurrency(code);
+    localStorage.setItem("factures_currency", code);
+  };
   const [supplierName, setSupplierName] = useState(initialData.suppliers[0]?.name ?? "");
   const [reference, setReference] = useState("");
   const [amount, setAmount] = useState("");
@@ -190,6 +212,18 @@ export default function DashboardClient({ initialData, session }: { initialData:
             Exporter CSV
           </a>
         </nav>
+
+        <div style={{ padding: "0 10px 8px" }}>
+          <div className="sidebar-section">Devise</div>
+          <select
+            className="select"
+            value={currency}
+            onChange={(e) => handleCurrencyChange(e.target.value)}
+            style={{ background: "#1e293b", color: "#e2e8f0", border: "1px solid #334155", fontSize: 13 }}
+          >
+            {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+          </select>
+        </div>
 
         <div className="sidebar-footer">
           <div className="sidebar-user">
