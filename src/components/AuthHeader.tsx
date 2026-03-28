@@ -3,6 +3,12 @@
 import { useRouter } from "next/navigation";
 import type { SessionPayload } from "@/lib/auth";
 
+const ROLE_LABELS: Record<string, string> = {
+  ADMIN: "Administrateur",
+  ACCOUNTING: "Comptabilite",
+  MANAGER: "Manager",
+};
+
 export default function AuthHeader({ session }: { session: SessionPayload }) {
   const router = useRouter();
 
@@ -13,21 +19,26 @@ export default function AuthHeader({ session }: { session: SessionPayload }) {
   };
 
   return (
-    <header className="card" style={{ padding: 20 }}>
+    <header className="card card-inner">
       <div className="space-between">
         <div>
-          <div className="badge blue">Version 6 production-ready</div>
-          <h1 className="title" style={{ fontSize: 34, margin: "10px 0 8px" }}>Gestion des factures professionnelles</h1>
-          <p className="subtitle">Zero papier, suivi des echeances, budget, reserve, audit et export.</p>
+          <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+            <span className="badge blue">V6</span>
+            <span className="badge purple">Production</span>
+          </div>
+          <h1 className="title">Gestion des factures</h1>
+          <p className="subtitle" style={{ marginTop: 6 }}>
+            Suivi des echeances, budget, reserve, audit et export.
+          </p>
         </div>
 
-        <div className="row">
-          <div className="card" style={{ padding: 14, minWidth: 240 }}>
-            <div style={{ fontWeight: 700 }}>{session.fullName}</div>
-            <div className="small muted">{session.email}</div>
-            <div className="tiny muted">Role : {session.role}</div>
+        <div className="row" style={{ gap: 14 }}>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>{session.fullName}</div>
+            <div className="tiny muted">{session.email}</div>
+            <div className="badge gray" style={{ marginTop: 6 }}>{ROLE_LABELS[session.role] ?? session.role}</div>
           </div>
-          <button className="button secondary" onClick={logout}>Se deconnecter</button>
+          <button className="button secondary sm" onClick={logout}>Deconnexion</button>
         </div>
       </div>
     </header>

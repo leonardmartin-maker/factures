@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import LoginForm from "@/components/LoginForm";
 import { getSessionFromRequestCookies } from "@/lib/auth";
 
@@ -10,27 +11,35 @@ export default async function LoginPage() {
   }
 
   return (
-    <main className="container" style={{ maxWidth: 560, minHeight: "100vh", display: "flex", alignItems: "center" }}>
-      <div className="card" style={{ width: "100%", padding: 28 }}>
+    <div className="login-wrapper">
+      <div className="card login-card">
         <div className="stack">
           <div>
-            <div className="badge blue">Version 6</div>
-            <h1 className="title" style={{ margin: "14px 0 8px" }}>Connexion</h1>
-            <p className="subtitle">Accede a l'application de gestion des factures professionnelles.</p>
+            <div className="row" style={{ gap: 8, marginBottom: 14 }}>
+              <span className="badge blue">V6</span>
+              <span className="badge purple">Production</span>
+            </div>
+            <h1 className="title">Connexion</h1>
+            <p className="subtitle" style={{ marginTop: 8 }}>
+              Accedez a la gestion des factures professionnelles.
+            </p>
           </div>
 
-          <div className="card" style={{ padding: 16, background: "#f8fafc" }}>
+          <div className="demo-box">
             <strong>Comptes de demonstration</strong>
-            <div className="small muted" style={{ marginTop: 8 }}>
-              admin@entreprise.local / demo123<br />
-              compta@entreprise.local / demo123<br />
-              manager@entreprise.local / demo123
+            <div className="muted" style={{ marginTop: 8, lineHeight: 1.8 }}>
+              <code>admin@entreprise.local</code><br />
+              <code>compta@entreprise.local</code><br />
+              <code>manager@entreprise.local</code><br />
+              Mot de passe : <code>demo123</code>
             </div>
           </div>
 
-          <LoginForm />
+          <Suspense>
+            <LoginForm />
+          </Suspense>
         </div>
       </div>
-    </main>
+    </div>
   );
 }
