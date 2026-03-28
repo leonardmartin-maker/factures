@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String      @id @default(cuid())
+  email            String      @unique
+  fullName         String
+  role             String      @default("ADMIN")
+  passwordHash     String
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  assignedInvoices Invoice[]   @relation("AssignedInvoices")
+  auditLogs        AuditLog[]
+}
+
+model Supplier {
+  id         String    @id @default(cuid())
+  name       String    @unique
+  email      String?
+  phone      String?
+  category   String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  invoices   Invoice[]
+}
+
+model Invoice {
+  id               String            @id @default(cuid())
+  reference        String            @unique
+  supplierId       String
+  supplier         Supplier          @relation(fields: [supplierId], references: [id])
+  amount           Float
+  currency         String            @default("EUR")
+  dueDate          DateTime
+  paymentDate      DateTime?
+  status           String            @default("A_QUALIFIER")
+  category         String            @default("AUTRES")
+  source           String            @default("MANUEL")
+  extractedByOcr   Boolean           @default(false)
+  notes            String?
+  postponeReason   String?
+  reminderAt       DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  assignedToUserId String?
+  assignedToUser   User?             @relation("AssignedInvoices", fields: [assignedToUserId], references: [id])
+  documents        InvoiceDocument[]
+  auditLogs        AuditLog[]
+  reminders        Reminder[]
+}
+
+model InvoiceDocument {
+  id            String   @id @default(cuid())
+  invoiceId     String?
+  invoice       Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  filename      String
+  mimeType      String
+  storagePath   String
+  originalSize  Int
+  uploadedAt    DateTime @default(now())
+  extractedText String?
+}
+
+model BudgetSnapshot {
+  id               String   @id @default(cuid())
+  monthKey         String   @unique
+  monthLabel       String
+  purchaseBudget   Float
+  expenseBudget    Float
+  reserveAvailable Float
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Reminder {
+  id          String   @id @default(cuid())
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  message     String
+  dueAt       DateTime
+  isCompleted Boolean  @default(false)
+  createdAt   DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  invoiceId  String?
+  invoice    Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  action     String
+  message    String
+  createdAt  DateTime @default(now())
+}
