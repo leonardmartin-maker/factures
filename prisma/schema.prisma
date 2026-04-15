@@ -13,10 +13,37 @@ model User {
   fullName         String
   role             String      @default("ADMIN")
   passwordHash     String
+  totpSecret       String?
+  totpEnabled      Boolean     @default(false)
+  totpBackupCodes  String?
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
   assignedInvoices Invoice[]   @relation("AssignedInvoices")
   auditLogs        AuditLog[]
+  passwordResets   PasswordReset[]
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount    Float
+  currency  String
+  paidAt    DateTime
+  method    String?
+  note      String?
+  createdAt DateTime @default(now())
+  createdBy String?
 }
 
 model Supplier {
@@ -65,6 +92,7 @@ model Invoice {
   documents           InvoiceDocument[]
   auditLogs           AuditLog[]
   reminders           Reminder[]
+  payments            Payment[]
 }
 
 model Counter {
@@ -79,8 +107,13 @@ model AppSettings {
   companyName     String?
   companyVat      String?
   companyAddress  String?
+  companyEmail    String?
+  companyPhone    String?
+  companyLogo     String?
   defaultCurrency String   @default("CHF")
+  defaultVatRate  Float    @default(8.1)
   invoicePrefix   String   @default("FAC")
+  overdueReminders Boolean @default(false)
   updatedAt       DateTime @updatedAt
 }
 

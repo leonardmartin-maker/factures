@@ -100,3 +100,45 @@ export const updateUserSchema = z.object({
 export const resetUserPasswordSchema = z.object({
   newPassword: z.string().min(8, "8 caracteres minimum"),
 });
+
+// Settings
+export const updateSettingsSchema = z.object({
+  companyName: z.string().max(120).optional().nullable(),
+  companyVat: z.string().max(40).optional().nullable(),
+  companyAddress: z.string().max(250).optional().nullable(),
+  companyEmail: z.string().email().optional().nullable().or(z.literal("")),
+  companyPhone: z.string().max(30).optional().nullable(),
+  companyLogo: z.string().max(500).optional().nullable(),
+  defaultCurrency: CURRENCY.optional(),
+  defaultVatRate: z.number().min(0).max(100).optional(),
+  invoicePrefix: z.string().min(1).max(20).optional(),
+  overdueReminders: z.boolean().optional(),
+});
+
+// Payments
+export const createPaymentSchema = z.object({
+  amount: z.number().positive(),
+  paidAt: z.string().min(10),
+  method: z.string().max(30).optional().nullable(),
+  note: z.string().max(300).optional().nullable(),
+});
+
+// Password reset
+export const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+export const resetPasswordTokenSchema = z.object({
+  token: z.string().min(16),
+  newPassword: z.string().min(8),
+});
+
+// 2FA
+export const verifyTotpSchema = z.object({
+  token: z.string().min(6).max(10),
+});
+export const loginWithTotpSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6),
+  totpToken: z.string().optional(),
+  backupCode: z.string().optional(),
+});

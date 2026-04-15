@@ -274,6 +274,73 @@ export async function resetUserPassword(id: string, newPassword: string, actorId
   return serializeUser(u);
 }
 
+// ============ PAYMENTS ============
+
+export async function listPayments(invoiceId: string) {
+  const pays = await prisma.payment.findMany({ where: { invoiceId }, orderBy: { paidAt: "desc" } });
+  return pays.map((p) => ({
+    id: p.id,
+    amount: Number(p.amount),
+    currency: p.currency,
+    paidAt: p.paidAt.toISOString(),
+    method: p.method,
+    note: p.note,
+    createdAt: p.createdAt.toISOString(),
+  }));
+}
+
+export async function addPayment(invoiceId: string, data: { amount: number; paidAt: string; method?: string | null; note?: string | null }, userId: string | null) {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice) throw new Error("Facture introuvable");
+
+  const payment = await prisma.payment.create({
+    data: {
+      invoiceId,
+      amount: data.amount,
+      currency: invoice.currency,
+      paidAt: new Date(data.paidAt),
+      method: data.method ?? null,
+      note: data.note ?? null,
+      createdBy: userId ?? null,
+    },
+  });
+
+  // Calcul du total paye et bascule en PAYEE si complet
+  const payments = await prisma.payment.findMany({ where: { invoiceId } });
+  const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0);
+  const totalDue = Number(invoice.amount);
+  let newStatus = invoice.status;
+  let newPaymentDate: Date | null = invoice.paymentDate;
+  if (totalPaid >= totalDue - 0.005) {
+    newStatus = "PAYEE";
+    newPaymentDate = new Date(data.paidAt);
+  } else if (totalPaid > 0 && invoice.status !== "REPORT_DEMANDE") {
+    // garde le statut actuel si partiel
+  }
+  if (newStatus !== invoice.status || newPaymentDate !== invoice.paymentDate) {
+    await prisma.invoice.update({ where: { id: invoiceId }, data: { status: newStatus, paymentDate: newPaymentDate } });
+  }
+  await addAuditLog(userId, invoiceId, "PAYMENT_ADDED", `Paiement de ${data.amount} ${invoice.currency} enregistre (total: ${totalPaid}/${totalDue}).`);
+  return { payment, totalPaid, totalDue };
+}
+
+export async function deletePayment(paymentId: string, userId: string | null) {
+  const p = await prisma.payment.findUnique({ where: { id: paymentId } });
+  if (!p) throw new Error("Paiement introuvable");
+  await prisma.payment.delete({ where: { id: paymentId } });
+  // Re-evaluation du statut
+  const invoice = await prisma.invoice.findUnique({ where: { id: p.invoiceId } });
+  if (invoice) {
+    const remaining = await prisma.payment.findMany({ where: { invoiceId: p.invoiceId } });
+    const totalPaid = remaining.reduce((s, x) => s + Number(x.amount), 0);
+    if (totalPaid < Number(invoice.amount) && invoice.status === "PAYEE") {
+      await prisma.invoice.update({ where: { id: p.invoiceId }, data: { status: "A_PAYER", paymentDate: null } });
+    }
+  }
+  await addAuditLog(userId, p.invoiceId, "PAYMENT_DELETED", `Paiement de ${p.amount} supprime.`);
+  return { ok: true };
+}
+
 export async function deleteUser(id: string, actorId: string | null) {
   if (id === actorId) throw new Error("Impossible de supprimer son propre compte");
   const u = await prisma.user.findUnique({ where: { id } });

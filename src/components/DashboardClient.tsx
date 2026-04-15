@@ -33,7 +33,7 @@ const CURRENCIES = [
   { code: "GBP", label: "GBP - Livre sterling", locale: "en-GB" },
 ];
 
-type Tab = "dashboard" | "factures" | "nouvelle" | "budget" | "fournisseurs" | "equipe" | "audit" | "compte";
+type Tab = "dashboard" | "factures" | "nouvelle" | "budget" | "fournisseurs" | "equipe" | "rapports" | "audit" | "compte" | "parametres";
 
 const VAT_PRESETS = [
   { value: 0, label: "0% (hors taxe)" },
@@ -115,6 +115,12 @@ export default function DashboardClient({ initialData, session }: { initialData:
   const [editingUser, setEditingUser] = useState<any>(null);
   const [resettingUser, setResettingUser] = useState<any>(null);
   const [deletingUser, setDeletingUser] = useState<any>(null);
+
+  // Payments
+  const [payingInvoice, setPayingInvoice] = useState<any>(null);
+
+  // OCR
+  const [ocrResult, setOcrResult] = useState<any>(null);
   const [postponeReason, setPostponeReason] = useState("Besoin de decalage de tresorerie");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
@@ -270,6 +276,34 @@ export default function DashboardClient({ initialData, session }: { initialData:
     const res = await fetch(`/api/users/${deletingUser.id}`, { method: "DELETE" });
     if (res.ok) { setDeletingUser(null); await refreshData(); showMessage("Utilisateur supprime"); }
     else { const err = await res.json(); showMessage(err.error ?? "Erreur"); }
+    setLoading(null);
+  };
+
+  // Paiement partiel
+  const addPayment = async (amount: number, paidAt: string, method: string, note: string) => {
+    if (!payingInvoice) return;
+    setLoading("pay-partial");
+    const res = await fetch(`/api/invoices/${payingInvoice.id}/payments`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount, paidAt, method: method || null, note: note || null }),
+    });
+    if (res.ok) { setPayingInvoice(null); await refreshData(); showMessage("Paiement enregistre"); }
+    else { const err = await res.json(); showMessage(err.error ?? "Erreur"); }
+    setLoading(null);
+  };
+
+  // OCR sur document
+  const runOcr = async (documentId: string) => {
+    setLoading(`ocr-${documentId}`);
+    setOcrResult(null);
+    const res = await fetch(`/api/ocr?documentId=${documentId}`, { method: "POST" });
+    if (res.ok) {
+      const d = await res.json();
+      setOcrResult(d);
+    } else {
+      const err = await res.json();
+      showMessage(err.error ?? "Erreur OCR");
+    }
     setLoading(null);
   };
 
@@ -447,10 +481,20 @@ export default function DashboardClient({ initialData, session }: { initialData:
               Equipe
             </button>
           )}
+          <button className={`sidebar-link ${tab === "rapports" ? "active" : ""}`} onClick={() => navTo("rapports")}>
+            <SvgIcon d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            Rapports TVA
+          </button>
           <button className={`sidebar-link ${tab === "audit" ? "active" : ""}`} onClick={() => navTo("audit")}>
             <SvgIcon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
             Audit et rappels
           </button>
+          {session.role === "ADMIN" && (
+            <button className={`sidebar-link ${tab === "parametres" ? "active" : ""}`} onClick={() => navTo("parametres")}>
+              <SvgIcon d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              Parametres
+            </button>
+          )}
           <button className={`sidebar-link ${tab === "compte" ? "active" : ""}`} onClick={() => navTo("compte")}>
             <SvgIcon d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
             Mon compte
@@ -496,7 +540,7 @@ export default function DashboardClient({ initialData, session }: { initialData:
         {tab === "dashboard" && (
           <div className="stack">
             <div className="page-header">
-              <h1 className="title">Tableau de bord</h1>
+              <h1 className="title">Tableau de bord{data.settings?.companyName ? ` - ${data.settings.companyName}` : ""}</h1>
               <p className="subtitle">Vue d'ensemble de l'activite factures et budget</p>
             </div>
             <section className="grid grid-4">
@@ -527,6 +571,17 @@ export default function DashboardClient({ initialData, session }: { initialData:
                 </div>
               </div>
             </section>
+
+            <section className="grid grid-2">
+              <MonthlyChart invoices={data.invoices} fmt={fmt} />
+              <CategoryChart invoices={data.invoices} fmt={fmt} />
+            </section>
+
+            <section className="grid grid-2">
+              <SuppliersChart invoices={data.invoices} fmt={fmt} />
+              <StatusChart invoices={data.invoices} />
+            </section>
+
             <section className="card card-inner">
               <div className="space-between">
                 <div className="section-title">Dernieres factures</div>
@@ -638,8 +693,9 @@ export default function DashboardClient({ initialData, session }: { initialData:
                           {inv.documents?.length > 0 ? (
                             <div className="stack-sm" style={{ gap: 4 }}>
                               {inv.documents.map((d: any) => (
-                                <div key={d.id} className="row" style={{ gap: 6 }}>
-                                  <a className="tiny" href={`/api/documents/${d.id}`} target="_blank" rel="noopener noreferrer" title={d.filename}>📎 {d.filename.length > 18 ? d.filename.slice(0, 16) + ".." : d.filename}</a>
+                                <div key={d.id} className="row" style={{ gap: 4 }}>
+                                  <a className="tiny" href={`/api/documents/${d.id}`} target="_blank" rel="noopener noreferrer" title={d.filename}>📎 {d.filename.length > 14 ? d.filename.slice(0, 12) + ".." : d.filename}</a>
+                                  <button className="button secondary sm" style={{ padding: "2px 6px", fontSize: 11 }} onClick={() => runOcr(d.id)} disabled={loading === `ocr-${d.id}`} aria-label="OCR" title="OCR">{loading === `ocr-${d.id}` ? "..." : "🔍"}</button>
                                   <button className="button secondary sm" style={{ padding: "2px 6px", fontSize: 11 }} onClick={() => deleteDoc(d.id)} aria-label="Supprimer">×</button>
                                 </div>
                               ))}
@@ -653,6 +709,7 @@ export default function DashboardClient({ initialData, session }: { initialData:
                         <td className="td-actions">
                           <div className="row">
                             {inv.status !== "PAYEE" && inv.status !== "ARCHIVEE" && <button className="button success sm" onClick={() => payInvoice(inv.id)} disabled={loading === inv.id}>Payer</button>}
+                            {inv.status !== "PAYEE" && inv.status !== "ARCHIVEE" && <button className="button secondary sm" onClick={() => setPayingInvoice(inv)}>+ Paiement partiel</button>}
                             {!["REPORT_DEMANDE", "PAYEE", "ARCHIVEE"].includes(inv.status) && <button className="button warning sm" onClick={() => requestPostpone(inv.id)} disabled={loading === inv.id}>Reporter</button>}
                             <button className="button secondary sm" onClick={() => setEditingInvoice(inv)}>Editer</button>
                             {(session.role === "ADMIN" || session.role === "ACCOUNTING") && <button className="button danger sm" onClick={() => setDeletingInvoice(inv)}>Supprimer</button>}
@@ -971,7 +1028,7 @@ export default function DashboardClient({ initialData, session }: { initialData:
           <div className="stack">
             <div className="page-header">
               <h1 className="title">Mon compte</h1>
-              <p className="subtitle">Informations et mot de passe</p>
+              <p className="subtitle">Informations, mot de passe et verification 2 facteurs</p>
             </div>
             <div className="grid grid-2">
               <div className="card card-inner">
@@ -993,7 +1050,16 @@ export default function DashboardClient({ initialData, session }: { initialData:
                 </form>
               </div>
             </div>
+            <TwoFactorCard />
           </div>
+        )}
+
+        {/* TAB: Rapports TVA */}
+        {tab === "rapports" && (<VatReportTab fmt={fmt} />)}
+
+        {/* TAB: Parametres entreprise */}
+        {tab === "parametres" && session.role === "ADMIN" && (
+          <SettingsTab initial={data.settings} onSaved={refreshData} />
         )}
       </main>
 
@@ -1066,6 +1132,49 @@ export default function DashboardClient({ initialData, session }: { initialData:
           onSave={resetUserPwd}
           loading={loading === "reset-pwd"}
         />
+      )}
+
+      {/* Modal: Paiement partiel */}
+      {payingInvoice && (
+        <PartialPaymentModal
+          invoice={payingInvoice}
+          onClose={() => setPayingInvoice(null)}
+          onSave={addPayment}
+          loading={loading === "pay-partial"}
+        />
+      )}
+
+      {/* Modal: OCR result */}
+      {ocrResult && (
+        <div className="modal-overlay" onClick={() => setOcrResult(null)}>
+          <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="space-between">
+              <div className="section-title">Resultat OCR</div>
+              <button className="button secondary sm" onClick={() => setOcrResult(null)} aria-label="Fermer">×</button>
+            </div>
+            <div className="tiny muted" style={{ marginTop: 8 }}>Confiance : {Math.round(ocrResult.confidence)}%</div>
+            {ocrResult.extracted && (
+              <div className="card card-inner" style={{ marginTop: 12, background: "#f8fafc" }}>
+                <div className="section-title" style={{ fontSize: 14 }}>Donnees extraites</div>
+                <div className="stack-sm tiny" style={{ marginTop: 10 }}>
+                  {ocrResult.extracted.supplierName && <div><strong>Fournisseur:</strong> {ocrResult.extracted.supplierName}</div>}
+                  {ocrResult.extracted.supplierReference && <div><strong>N° facture:</strong> {ocrResult.extracted.supplierReference}</div>}
+                  {ocrResult.extracted.amount && <div><strong>Montant:</strong> {ocrResult.extracted.amount} {ocrResult.extracted.currency ?? ""}</div>}
+                  {ocrResult.extracted.date && <div><strong>Date:</strong> {ocrResult.extracted.date}</div>}
+                  {ocrResult.extracted.iban && <div><strong>IBAN:</strong> <code>{ocrResult.extracted.iban}</code></div>}
+                  {ocrResult.extracted.supplierVat && <div><strong>N° TVA:</strong> {ocrResult.extracted.supplierVat}</div>}
+                </div>
+              </div>
+            )}
+            <details style={{ marginTop: 12 }}>
+              <summary className="small" style={{ cursor: "pointer" }}>Voir le texte brut</summary>
+              <pre style={{ background: "#0f172a", color: "#e2e8f0", padding: 12, borderRadius: 8, fontSize: 11, maxHeight: 300, overflow: "auto", marginTop: 8, whiteSpace: "pre-wrap" }}>{ocrResult.text}</pre>
+            </details>
+            <div className="row" style={{ marginTop: 16, justifyContent: "flex-end" }}>
+              <button className="button secondary" onClick={() => setOcrResult(null)}>Fermer</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal: User delete */}
@@ -1196,6 +1305,552 @@ function UserModal({ user, onClose, onSave, loading }: {
             <button className="button" disabled={loading}>{loading ? "..." : user ? "Enregistrer" : "Creer"}</button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// ============ CHARTS ============
+
+function MonthlyChart({ invoices, fmt }: { invoices: any[]; fmt: (v: number) => string }) {
+  const months: { key: string; label: string; ht: number; ttc: number }[] = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    months.push({ key, label: d.toLocaleDateString("fr-FR", { month: "short", year: "2-digit" }), ht: 0, ttc: 0 });
+  }
+  for (const inv of invoices) {
+    const d = inv.issueDate ? new Date(inv.issueDate) : new Date(inv.dueDate);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const m = months.find((x) => x.key === key);
+    if (m) { m.ht += Number(inv.amountHt ?? inv.amount); m.ttc += Number(inv.amount); }
+  }
+  const max = Math.max(1, ...months.map((m) => m.ttc));
+  const w = 600, h = 200, pad = 28, bw = (w - 2 * pad) / months.length * 0.7;
+
+  return (
+    <div className="card card-inner">
+      <div className="section-title">Activite 6 derniers mois</div>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: "auto", marginTop: 12 }}>
+        {[0, 0.25, 0.5, 0.75, 1].map((r) => (
+          <line key={r} x1={pad} x2={w - pad} y1={h - pad - r * (h - 2 * pad)} y2={h - pad - r * (h - 2 * pad)} stroke="#e2e8f0" strokeDasharray={r === 0 ? "0" : "3 3"} />
+        ))}
+        {months.map((m, i) => {
+          const x = pad + i * (w - 2 * pad) / months.length + (w - 2 * pad) / months.length / 2 - bw / 2;
+          const bh = (m.ttc / max) * (h - 2 * pad);
+          return (
+            <g key={m.key}>
+              <rect x={x} y={h - pad - bh} width={bw} height={bh} fill="#3b82f6" rx={3}>
+                <title>{m.label}: {fmt(m.ttc)}</title>
+              </rect>
+              <text x={x + bw / 2} y={h - pad + 14} textAnchor="middle" fontSize="11" fill="#64748b">{m.label}</text>
+              {m.ttc > 0 && <text x={x + bw / 2} y={h - pad - bh - 4} textAnchor="middle" fontSize="10" fill="#0f172a" fontWeight="600">{Math.round(m.ttc)}</text>}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function CategoryChart({ invoices, fmt }: { invoices: any[]; fmt: (v: number) => string }) {
+  const tot: Record<string, number> = {};
+  for (const inv of invoices) tot[inv.category] = (tot[inv.category] ?? 0) + Number(inv.amount);
+  const entries = Object.entries(tot).sort((a, b) => b[1] - a[1]);
+  const sum = entries.reduce((s, [, v]) => s + v, 0);
+  const colors = ["#3b82f6", "#8b5cf6", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4", "#ec4899", "#64748b", "#a855f7"];
+
+  return (
+    <div className="card card-inner">
+      <div className="section-title">Repartition par categorie</div>
+      <div className="stack-sm" style={{ marginTop: 12 }}>
+        {entries.length === 0 && <div className="small muted">Aucune donnee</div>}
+        {entries.map(([cat, val], i) => {
+          const pct = sum > 0 ? (val / sum * 100) : 0;
+          return (
+            <div key={cat}>
+              <div className="space-between tiny">
+                <span>{CATEGORY_LABELS[cat] ?? cat}</span>
+                <strong>{fmt(val)} <span className="muted">({pct.toFixed(1)}%)</span></strong>
+              </div>
+              <div className="progress" style={{ marginTop: 4 }}>
+                <span style={{ width: `${pct}%`, background: colors[i % colors.length] }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SuppliersChart({ invoices, fmt }: { invoices: any[]; fmt: (v: number) => string }) {
+  const tot: Record<string, number> = {};
+  for (const inv of invoices) {
+    const k = inv.supplier?.name ?? "?";
+    tot[k] = (tot[k] ?? 0) + Number(inv.amount);
+  }
+  const top = Object.entries(tot).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const max = top[0]?.[1] ?? 1;
+
+  return (
+    <div className="card card-inner">
+      <div className="section-title">Top 5 fournisseurs</div>
+      <div className="stack-sm" style={{ marginTop: 12 }}>
+        {top.length === 0 && <div className="small muted">Aucune donnee</div>}
+        {top.map(([name, val]) => (
+          <div key={name}>
+            <div className="space-between tiny"><span>{name}</span><strong>{fmt(val)}</strong></div>
+            <div className="progress" style={{ marginTop: 4 }}><span className="bar-blue" style={{ width: `${val / max * 100}%` }} /></div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatusChart({ invoices }: { invoices: any[] }) {
+  const tot: Record<string, number> = {};
+  for (const inv of invoices) tot[inv.status] = (tot[inv.status] ?? 0) + 1;
+  const colors: Record<string, string> = {
+    A_QUALIFIER: "#94a3b8", A_VALIDER: "#f59e0b", A_PAYER: "#3b82f6",
+    REPORT_DEMANDE: "#f97316", PAYEE: "#22c55e", ARCHIVEE: "#cbd5e1",
+  };
+  const total = invoices.length;
+  let acc = 0;
+  const segs: { status: string; from: number; to: number; count: number; color: string }[] = [];
+  for (const s of Object.keys(colors)) {
+    const count = tot[s] ?? 0;
+    if (count === 0) continue;
+    segs.push({ status: s, from: acc, to: acc + count, count, color: colors[s] });
+    acc += count;
+  }
+
+  return (
+    <div className="card card-inner">
+      <div className="section-title">Statuts des factures</div>
+      {total === 0 ? <div className="small muted" style={{ marginTop: 12 }}>Aucune facture</div> : (
+        <>
+          <div style={{ display: "flex", marginTop: 16, height: 16, borderRadius: 8, overflow: "hidden", background: "#e2e8f0" }}>
+            {segs.map((s) => (
+              <div key={s.status} style={{ width: `${(s.count / total) * 100}%`, background: s.color }} title={`${STATUS_LABELS[s.status]}: ${s.count}`} />
+            ))}
+          </div>
+          <div className="stack-sm" style={{ marginTop: 14 }}>
+            {segs.map((s) => (
+              <div key={s.status} className="row tiny" style={{ justifyContent: "space-between" }}>
+                <span className="row" style={{ gap: 8 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 2, background: s.color, display: "inline-block" }} />
+                  {STATUS_LABELS[s.status]}
+                </span>
+                <strong>{s.count}</strong>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TwoFactorCard() {
+  const [status, setStatus] = useState<"idle" | "setup" | "loading">("idle");
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
+  const [disablePwd, setDisablePwd] = useState("");
+  const [showDisable, setShowDisable] = useState(false);
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/auth/me").then((r) => r.json()).then((d) => setEnabled(!!d?.user?.totpEnabled)).catch(() => {});
+  }, []);
+
+  const startSetup = async () => {
+    setStatus("loading"); setError(null);
+    const res = await fetch("/api/auth/2fa/setup", { method: "POST" });
+    if (res.ok) {
+      const d = await res.json(); setQrCode(d.qrCode); setSecret(d.secret); setStatus("setup");
+    } else { setError("Erreur"); setStatus("idle"); }
+  };
+
+  const confirmEnable = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault(); setError(null);
+    const res = await fetch("/api/auth/2fa/enable", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: code }),
+    });
+    const d = await res.json();
+    if (res.ok) { setBackupCodes(d.backupCodes); setEnabled(true); setStatus("idle"); setQrCode(null); setSecret(null); setCode(""); }
+    else setError(d.error ?? "Code invalide");
+  };
+
+  const disable = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault(); setError(null);
+    const res = await fetch("/api/auth/2fa/disable", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: disablePwd }),
+    });
+    if (res.ok) { setEnabled(false); setShowDisable(false); setDisablePwd(""); }
+    else { const d = await res.json(); setError(d.error ?? "Erreur"); }
+  };
+
+  return (
+    <div className="card card-inner">
+      <div className="section-title">Verification a 2 facteurs (2FA)</div>
+      <p className="small muted" style={{ marginTop: 8 }}>Securise ta connexion avec Google Authenticator, 1Password, Authy, etc.</p>
+
+      {backupCodes && (
+        <div style={{ marginTop: 12, padding: 14, background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 8 }}>
+          <strong>⚠ Codes de secours (a conserver precieusement)</strong>
+          <p className="tiny" style={{ margin: "6px 0 10px" }}>Si tu perds ton telephone, chaque code peut remplacer un code a 6 chiffres (usage unique). Ils ne seront plus affiches.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 4, fontFamily: "monospace" }}>
+            {backupCodes.map((c) => <code key={c} style={{ background: "white", padding: "4px 8px", borderRadius: 4 }}>{c}</code>)}
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <button className="button secondary sm" onClick={() => navigator.clipboard?.writeText(backupCodes.join("\n"))}>Copier</button>
+            <button className="button secondary sm" onClick={() => setBackupCodes(null)}>J'ai note, fermer</button>
+          </div>
+        </div>
+      )}
+
+      {enabled === null && <div className="small muted">Chargement...</div>}
+
+      {enabled === false && status === "idle" && (
+        <div style={{ marginTop: 12 }}>
+          <div className="row"><span className="badge gray">Desactivee</span></div>
+          <button className="button" style={{ marginTop: 12 }} onClick={startSetup} disabled={status === "loading" as any}>{status === "loading" as any ? "..." : "Activer la 2FA"}</button>
+        </div>
+      )}
+
+      {status === "setup" && qrCode && (
+        <form onSubmit={confirmEnable} className="stack-sm" style={{ marginTop: 12 }}>
+          <div className="small">1. Scanne ce QR code avec ton app :</div>
+          <img src={qrCode} alt="QR Code" style={{ width: 200, height: 200, background: "white", padding: 8, borderRadius: 8, border: "1px solid #e2e8f0" }} />
+          <div className="tiny muted">Ou saisis manuellement : <code>{secret}</code></div>
+          <div>
+            <div className="label">2. Entre le code a 6 chiffres affiche par l'app</div>
+            <input className="input" value={code} onChange={(e) => setCode(e.target.value.replace(/\s/g, ""))} maxLength={6} inputMode="numeric" autoFocus required />
+          </div>
+          {error && <div className="badge red" style={{ padding: "6px 12px" }}>{error}</div>}
+          <div className="row">
+            <button className="button" type="submit">Activer</button>
+            <button className="button secondary" type="button" onClick={() => { setStatus("idle"); setQrCode(null); setSecret(null); setCode(""); }}>Annuler</button>
+          </div>
+        </form>
+      )}
+
+      {enabled === true && (
+        <div style={{ marginTop: 12 }}>
+          <div className="row"><span className="badge green">Activee</span></div>
+          {!showDisable ? (
+            <button className="button secondary" style={{ marginTop: 12 }} onClick={() => setShowDisable(true)}>Desactiver la 2FA</button>
+          ) : (
+            <form onSubmit={disable} className="stack-sm" style={{ marginTop: 12 }}>
+              <div><div className="label">Confirme avec ton mot de passe</div><input className="input" type="password" value={disablePwd} onChange={(e) => setDisablePwd(e.target.value)} required autoComplete="current-password" /></div>
+              {error && <div className="badge red" style={{ padding: "6px 12px" }}>{error}</div>}
+              <div className="row">
+                <button className="button danger">Desactiver</button>
+                <button className="button secondary" type="button" onClick={() => { setShowDisable(false); setDisablePwd(""); setError(null); }}>Annuler</button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VatReportTab({ fmt }: { fmt: (v: number) => string }) {
+  const now = new Date();
+  const q = Math.floor(now.getMonth() / 3);
+  const qStart = new Date(now.getFullYear(), q * 3, 1);
+  const qEnd = new Date(now.getFullYear(), q * 3 + 3, 0);
+  const [from, setFrom] = useState(qStart.toISOString().slice(0, 10));
+  const [to, setTo] = useState(qEnd.toISOString().slice(0, 10));
+  const [basedOn, setBasedOn] = useState<"issueDate" | "paymentDate">("issueDate");
+  const [report, setReport] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const generate = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setLoading(true);
+    const res = await fetch(`/api/reports/vat?from=${from}&to=${to}&basedOn=${basedOn}`);
+    if (res.ok) setReport(await res.json());
+    setLoading(false);
+  };
+
+  const setQuarter = (year: number, quarter: number) => {
+    const start = new Date(year, quarter * 3, 1);
+    const end = new Date(year, quarter * 3 + 3, 0);
+    setFrom(start.toISOString().slice(0, 10));
+    setTo(end.toISOString().slice(0, 10));
+  };
+
+  const exportCsv = () => {
+    if (!report) return;
+    const rows = [
+      ["Reference", "Fournisseur", "Date", "HT", "Taux TVA", "TVA", "TTC", "Devise"].join(","),
+      ...report.invoices.map((i: any) => [
+        i.reference, `"${(i.supplierName ?? "").replace(/"/g, '""')}"`,
+        (i[basedOn] ?? "").slice(0, 10), i.amountHt ?? "", i.vatRate, i.vatAmount ?? "", i.amount, i.currency,
+      ].join(",")),
+    ];
+    const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `tva_${from}_${to}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="stack">
+      <div className="page-header">
+        <h1 className="title">Rapport TVA</h1>
+        <p className="subtitle">Recapitulatif par periode (utile pour la declaration trimestrielle)</p>
+      </div>
+      <div className="card card-inner">
+        <form onSubmit={generate} className="stack-sm">
+          <div className="grid grid-3">
+            <div><div className="label">Du</div><input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
+            <div><div className="label">Au</div><input className="input" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></div>
+            <div>
+              <div className="label">Base sur</div>
+              <select className="select" value={basedOn} onChange={(e) => setBasedOn(e.target.value as any)}>
+                <option value="issueDate">Date d'emission</option>
+                <option value="paymentDate">Date de paiement</option>
+              </select>
+            </div>
+          </div>
+          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+            {[0, 1, 2, 3].map((qi) => (
+              <button key={qi} type="button" className="button secondary sm" onClick={() => setQuarter(now.getFullYear(), qi)}>
+                T{qi + 1} {now.getFullYear()}
+              </button>
+            ))}
+            <button type="button" className="button secondary sm" onClick={() => setQuarter(now.getFullYear() - 1, 3)}>T4 {now.getFullYear() - 1}</button>
+            <button type="button" className="button secondary sm" onClick={() => { setFrom(`${now.getFullYear()}-01-01`); setTo(`${now.getFullYear()}-12-31`); }}>Annee {now.getFullYear()}</button>
+          </div>
+          <div className="row">
+            <button className="button" disabled={loading}>{loading ? "..." : "Generer le rapport"}</button>
+            {report && <button type="button" className="button secondary" onClick={exportCsv}>Exporter CSV</button>}
+          </div>
+        </form>
+      </div>
+
+      {report && (
+        <>
+          <div className="grid grid-3">
+            <div className="card stat-card accent-blue"><div className="stat-label">Total HT</div><div className="stat-value">{fmt(report.totals.amountHt)}</div></div>
+            <div className="card stat-card accent-purple"><div className="stat-label">Total TVA</div><div className="stat-value">{fmt(report.totals.vatAmount)}</div></div>
+            <div className="card stat-card accent-green"><div className="stat-label">Total TTC</div><div className="stat-value">{fmt(report.totals.amountTtc)}</div><div className="stat-hint">{report.totals.count} facture(s)</div></div>
+          </div>
+          <div className="card card-inner">
+            <div className="section-title">Ventilation par taux TVA</div>
+            <div className="table-responsive" style={{ marginTop: 12 }}>
+              <table className="table">
+                <thead><tr><th>Taux</th><th>Devise</th><th>Factures</th><th>Total HT</th><th>Total TVA</th><th>Total TTC</th></tr></thead>
+                <tbody>
+                  {report.byRate.map((r: any, i: number) => (
+                    <tr key={i}>
+                      <td data-label="Taux"><strong>{r.rate}%</strong></td>
+                      <td data-label="Devise">{r.currency}</td>
+                      <td data-label="Factures">{r.count}</td>
+                      <td data-label="HT" style={{ fontWeight: 600 }}>{fmtCurrency(r.amountHt, r.currency)}</td>
+                      <td data-label="TVA" style={{ fontWeight: 600 }}>{fmtCurrency(r.vatAmount, r.currency)}</td>
+                      <td data-label="TTC" style={{ fontWeight: 600 }}>{fmtCurrency(r.amountTtc, r.currency)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SettingsTab({ initial, onSaved }: { initial: any; onSaved: () => void }) {
+  const [form, setForm] = useState({
+    companyName: initial.companyName ?? "",
+    companyVat: initial.companyVat ?? "",
+    companyAddress: initial.companyAddress ?? "",
+    companyEmail: initial.companyEmail ?? "",
+    companyPhone: initial.companyPhone ?? "",
+    defaultCurrency: initial.defaultCurrency ?? "CHF",
+    defaultVatRate: String(initial.defaultVatRate ?? 8.1),
+    invoicePrefix: initial.invoicePrefix ?? "FAC",
+    overdueReminders: !!initial.overdueReminders,
+  });
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState<{ t: "ok" | "err"; m: string } | null>(null);
+
+  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault(); setLoading(true); setMsg(null);
+    const res = await fetch("/api/settings", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyName: form.companyName || null,
+        companyVat: form.companyVat || null,
+        companyAddress: form.companyAddress || null,
+        companyEmail: form.companyEmail || null,
+        companyPhone: form.companyPhone || null,
+        defaultCurrency: form.defaultCurrency,
+        defaultVatRate: Number(form.defaultVatRate),
+        invoicePrefix: form.invoicePrefix,
+        overdueReminders: form.overdueReminders,
+      }),
+    });
+    if (res.ok) { setMsg({ t: "ok", m: "Parametres enregistres" }); onSaved(); }
+    else { const d = await res.json(); setMsg({ t: "err", m: d.error ?? "Erreur" }); }
+    setLoading(false);
+  };
+
+  return (
+    <div className="stack">
+      <div className="page-header">
+        <h1 className="title">Parametres entreprise</h1>
+        <p className="subtitle">Informations, devise et prefixe de numerotation</p>
+      </div>
+      <div className="card card-inner">
+        <form className="stack-sm" onSubmit={submit}>
+          <div className="section-title">Mon entreprise</div>
+          <div className="grid grid-2">
+            <div><div className="label">Nom de l'entreprise</div><input className="input" value={form.companyName} onChange={(e) => setForm((f) => ({ ...f, companyName: e.target.value }))} placeholder="Acme SA" /></div>
+            <div><div className="label">N° de TVA</div><input className="input" value={form.companyVat} onChange={(e) => setForm((f) => ({ ...f, companyVat: e.target.value }))} placeholder="CHE-123.456.789" /></div>
+          </div>
+          <div><div className="label">Adresse complete</div><input className="input" value={form.companyAddress} onChange={(e) => setForm((f) => ({ ...f, companyAddress: e.target.value }))} placeholder="Rue, NPA, Ville" /></div>
+          <div className="grid grid-2">
+            <div><div className="label">Email</div><input className="input" type="email" value={form.companyEmail} onChange={(e) => setForm((f) => ({ ...f, companyEmail: e.target.value }))} /></div>
+            <div><div className="label">Telephone</div><input className="input" value={form.companyPhone} onChange={(e) => setForm((f) => ({ ...f, companyPhone: e.target.value }))} /></div>
+          </div>
+
+          <hr className="divider" style={{ margin: "16px 0" }} />
+          <div className="section-title">Valeurs par defaut</div>
+          <div className="grid grid-3">
+            <div>
+              <div className="label">Devise par defaut</div>
+              <select className="select" value={form.defaultCurrency} onChange={(e) => setForm((f) => ({ ...f, defaultCurrency: e.target.value }))}>
+                {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+              </select>
+            </div>
+            <div>
+              <div className="label">Taux TVA par defaut</div>
+              <input className="input" type="number" step="0.1" min="0" max="100" value={form.defaultVatRate} onChange={(e) => setForm((f) => ({ ...f, defaultVatRate: e.target.value }))} />
+            </div>
+            <div>
+              <div className="label">Prefixe de numerotation</div>
+              <input className="input" value={form.invoicePrefix} onChange={(e) => setForm((f) => ({ ...f, invoicePrefix: e.target.value.toUpperCase() }))} maxLength={20} placeholder="FAC" />
+            </div>
+          </div>
+
+          <hr className="divider" style={{ margin: "16px 0" }} />
+          <div className="section-title">Notifications</div>
+          <label className="row" style={{ gap: 8 }}>
+            <input type="checkbox" checked={form.overdueReminders} onChange={(e) => setForm((f) => ({ ...f, overdueReminders: e.target.checked }))} />
+            <span className="small">Envoyer un email aux admins/compta chaque matin si des factures sont en retard</span>
+          </label>
+          <div className="tiny muted">
+            Requiert la configuration SMTP (variables d'env SMTP_HOST, SMTP_USER, SMTP_PASS). Le cron doit etre active cote serveur.
+          </div>
+
+          {msg && <div className={`badge ${msg.t === "ok" ? "green" : "red"}`} style={{ padding: "8px 12px" }}>{msg.m}</div>}
+
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="button" disabled={loading}>{loading ? "..." : "Enregistrer"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function PartialPaymentModal({ invoice, onClose, onSave, loading }: {
+  invoice: any; onClose: () => void; onSave: (amount: number, paidAt: string, method: string, note: string) => void; loading: boolean;
+}) {
+  const [payments, setPayments] = useState<any[]>([]);
+  const [amount, setAmount] = useState("");
+  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
+  const [method, setMethod] = useState(invoice.paymentMethod ?? "VIREMENT");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    fetch(`/api/invoices/${invoice.id}/payments`).then((r) => r.json()).then((d) => setPayments(d.payments ?? [])).catch(() => {});
+  }, [invoice.id]);
+
+  const totalPaid = payments.reduce((s, p) => s + Number(p.amount), 0);
+  const remaining = Number(invoice.amount) - totalPaid;
+  const fmt = (v: number) => fmtCurrency(v, invoice.currency);
+
+  const submit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    onSave(Number(amount), paidAt, method, note);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="space-between">
+          <div className="section-title">Paiement partiel - {invoice.reference}</div>
+          <button className="button secondary sm" onClick={onClose} aria-label="Fermer">×</button>
+        </div>
+        <div className="grid grid-3" style={{ marginTop: 12 }}>
+          <div className="card stat-card accent-blue"><div className="stat-label">Total du</div><div className="stat-value" style={{ fontSize: 20 }}>{fmt(Number(invoice.amount))}</div></div>
+          <div className="card stat-card accent-green"><div className="stat-label">Deja paye</div><div className="stat-value" style={{ fontSize: 20 }}>{fmt(totalPaid)}</div></div>
+          <div className="card stat-card accent-red"><div className="stat-label">Restant</div><div className="stat-value" style={{ fontSize: 20 }}>{fmt(Math.max(0, remaining))}</div></div>
+        </div>
+
+        {payments.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div className="section-title" style={{ fontSize: 14 }}>Paiements enregistres</div>
+            <div className="table-responsive" style={{ marginTop: 8 }}>
+              <table className="table">
+                <thead><tr><th>Date</th><th>Montant</th><th>Mode</th><th>Note</th></tr></thead>
+                <tbody>
+                  {payments.map((p) => (
+                    <tr key={p.id}>
+                      <td data-label="Date">{fmtDate(p.paidAt)}</td>
+                      <td data-label="Montant" style={{ fontWeight: 600 }}>{fmtCurrency(p.amount, p.currency)}</td>
+                      <td data-label="Mode">{PAYMENT_METHOD_LABELS[p.method ?? ""] ?? "-"}</td>
+                      <td data-label="Note" className="small muted">{p.note ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {remaining > 0 && (
+          <form onSubmit={submit} className="stack-sm" style={{ marginTop: 16 }}>
+            <div className="section-title" style={{ fontSize: 14 }}>Ajouter un paiement</div>
+            <div className="grid grid-3">
+              <div>
+                <div className="label">Montant ({invoice.currency})</div>
+                <input className="input" type="number" min="0.01" step="0.01" max={remaining} value={amount} onChange={(e) => setAmount(e.target.value)} required />
+              </div>
+              <div><div className="label">Date</div><input className="input" type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} required /></div>
+              <div>
+                <div className="label">Mode</div>
+                <select className="select" value={method} onChange={(e) => setMethod(e.target.value)}>
+                  {PAYMENT_METHODS.filter((p) => p.value).map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <div className="label">Note (optionnel)</div>
+              <input className="input" value={note} onChange={(e) => setNote(e.target.value)} maxLength={300} />
+            </div>
+            <div className="row" style={{ justifyContent: "flex-end" }}>
+              <button type="button" className="button secondary" onClick={() => setAmount(String(remaining))}>Tout restant ({fmt(remaining)})</button>
+              <button className="button" disabled={loading}>{loading ? "..." : "Enregistrer"}</button>
+            </div>
+          </form>
+        )}
+        {remaining <= 0 && <div className="badge green" style={{ padding: "10px 14px", marginTop: 16 }}>Facture entierement payee</div>}
       </div>
     </div>
   );

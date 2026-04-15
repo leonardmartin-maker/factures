@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth";
 
-const publicPaths = ["/login", "/api/auth/login"];
+const publicPaths = [
+  "/login",
+  "/forgot-password",
+  "/reset-password",
+  "/api/auth/login",
+  "/api/auth/forgot-password",
+  "/api/auth/reset-password",
+  "/api/health",
+];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -9,7 +17,12 @@ export function middleware(request: NextRequest) {
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon.ico") ||
-    pathname.startsWith("/public")
+    pathname.startsWith("/public") ||
+    pathname.startsWith("/api/cron/") ||
+    pathname === "/manifest.json" ||
+    pathname === "/sw.js" ||
+    pathname.startsWith("/icon-") ||
+    pathname === "/apple-touch-icon.png"
   ) {
     return NextResponse.next();
   }
@@ -34,5 +47,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/login", "/api/:path*"],
+  matcher: ["/", "/login", "/forgot-password", "/reset-password", "/api/:path*"],
 };
