@@ -33,7 +33,16 @@ const CURRENCIES = [
   { code: "GBP", label: "GBP - Livre sterling", locale: "en-GB" },
 ];
 
-type Tab = "dashboard" | "factures" | "nouvelle" | "budget" | "fournisseurs" | "audit";
+type Tab = "dashboard" | "factures" | "nouvelle" | "budget" | "fournisseurs" | "audit" | "compte";
+
+const VAT_PRESETS = [
+  { value: 0, label: "0% (hors taxe)" },
+  { value: 2.5, label: "2.5% (reduit CH)" },
+  { value: 3.8, label: "3.8% (hebergement CH)" },
+  { value: 7.7, label: "7.7% (CH ancien)" },
+  { value: 8.1, label: "8.1% (CH standard)" },
+  { value: 20, label: "20% (FR standard)" },
+];
 
 function getSavedCurrency(): string {
   if (typeof window === "undefined") return "CHF";
@@ -67,12 +76,25 @@ export default function DashboardClient({ initialData, session }: { initialData:
   const [supplierName, setSupplierName] = useState(initialData.suppliers[0]?.name ?? "");
   const [reference, setReference] = useState("");
   const [amount, setAmount] = useState("");
+  const [vatRate, setVatRate] = useState("8.1");
+  const [notes, setNotes] = useState("");
   const [dueDate, setDueDate] = useState(new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10));
   const [category, setCategory] = useState("ACHATS");
   const [source, setSource] = useState("PDF");
+  const [attachFile, setAttachFile] = useState<File | null>(null);
   const [postponeReason, setPostponeReason] = useState("Besoin de decalage de tresorerie");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState("ALL");
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const [editingInvoice, setEditingInvoice] = useState<any>(null);
+  const [deletingInvoice, setDeletingInvoice] = useState<any>(null);
+  const [pwdForm, setPwdForm] = useState({ current: "", next: "", confirm: "" });
+  const [pwdMessage, setPwdMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
   const [budgetForm, setBudgetForm] = useState({
     monthKey: initialData.budget?.monthKey ?? "2026-03",
     monthLabel: initialData.budget?.monthLabel ?? "Mars 2026",
@@ -96,17 +118,115 @@ export default function DashboardClient({ initialData, session }: { initialData:
   const filteredInvoices = useMemo(() => {
     let list = data.invoices;
     if (statusFilter !== "ALL") list = list.filter((i) => i.status === statusFilter);
+    if (supplierFilter !== "ALL") list = list.filter((i) => i.supplier?.name === supplierFilter);
+    if (categoryFilter !== "ALL") list = list.filter((i) => i.category === categoryFilter);
+    if (dateFrom) { const d = new Date(dateFrom); list = list.filter((i) => new Date(i.dueDate) >= d); }
+    if (dateTo) { const d = new Date(dateTo); d.setHours(23, 59, 59, 999); list = list.filter((i) => new Date(i.dueDate) <= d); }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter((i) => [i.reference, i.supplier.name, i.category, i.assignedTo ?? ""].join(" ").toLowerCase().includes(q));
+      list = list.filter((i) => [i.reference, i.supplier?.name ?? "", i.category, i.assignedTo ?? "", i.notes ?? ""].join(" ").toLowerCase().includes(q));
     }
     return list;
-  }, [data.invoices, statusFilter, searchQuery]);
+  }, [data.invoices, statusFilter, supplierFilter, categoryFilter, dateFrom, dateTo, searchQuery]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredInvoices.length / pageSize));
+  const pagedInvoices = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredInvoices.slice(start, start + pageSize);
+  }, [filteredInvoices, page]);
+
+  // Reset to page 1 when filters change
+  useMemo(() => { if (page > pageCount) setPage(1); }, [pageCount, page]);
+
+  const resetFilters = () => {
+    setStatusFilter("ALL"); setSupplierFilter("ALL"); setCategoryFilter("ALL");
+    setDateFrom(""); setDateTo(""); setSearchQuery(""); setPage(1);
+  };
+
+  const clearForm = () => {
+    setReference(""); setAmount(""); setNotes(""); setAttachFile(null);
+  };
 
   const submitInvoice = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault(); setLoading("invoice");
-    const res = await fetch("/api/invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reference, supplierName, amount: Number(amount), dueDate, category, source }) });
-    if (res.ok) { setReference(""); setAmount(""); await refreshData(); showMessage("Facture creee"); setTab("factures"); }
+    const res = await fetch("/api/invoices", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reference, supplierName, amount: Number(amount), vatRate: Number(vatRate), dueDate, category, source, notes: notes || null }),
+    });
+    if (res.ok) {
+      const { invoice } = await res.json();
+      // Optional attachment
+      if (attachFile && invoice?.id) {
+        const fd = new FormData(); fd.append("file", attachFile); fd.append("invoiceId", invoice.id);
+        await fetch("/api/upload", { method: "POST", body: fd });
+      }
+      clearForm();
+      await refreshData(); showMessage("Facture creee"); setTab("factures");
+    } else {
+      const err = await res.json();
+      showMessage(err.error ?? "Erreur creation");
+    }
+    setLoading(null);
+  };
+
+  const saveInvoiceEdit = async (payload: any) => {
+    if (!editingInvoice) return;
+    setLoading("edit");
+    const res = await fetch(`/api/invoices/${editingInvoice.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) { setEditingInvoice(null); await refreshData(); showMessage("Facture modifiee"); }
+    else { const err = await res.json(); showMessage(err.error ?? "Erreur"); }
+    setLoading(null);
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingInvoice) return;
+    setLoading("delete");
+    const res = await fetch(`/api/invoices/${deletingInvoice.id}`, { method: "DELETE" });
+    if (res.ok) { setDeletingInvoice(null); await refreshData(); showMessage("Facture supprimee"); }
+    else { const err = await res.json(); showMessage(err.error ?? "Erreur"); }
+    setLoading(null);
+  };
+
+  const deleteDoc = async (docId: string) => {
+    if (!confirm("Supprimer ce document ?")) return;
+    await fetch(`/api/documents/${docId}`, { method: "DELETE" });
+    await refreshData();
+  };
+
+  const attachToInvoice = async (invoiceId: string, file: File) => {
+    const fd = new FormData(); fd.append("file", file); fd.append("invoiceId", invoiceId);
+    setLoading(`attach-${invoiceId}`);
+    await fetch("/api/upload", { method: "POST", body: fd });
+    await refreshData(); setLoading(null);
+  };
+
+  const changePassword = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setPwdMessage(null);
+    if (pwdForm.next !== pwdForm.confirm) {
+      setPwdMessage({ type: "error", text: "Les mots de passe ne correspondent pas" }); return;
+    }
+    if (pwdForm.next.length < 8) {
+      setPwdMessage({ type: "error", text: "8 caracteres minimum" }); return;
+    }
+    setLoading("pwd");
+    const res = await fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword: pwdForm.current, newPassword: pwdForm.next }),
+    });
+    if (res.ok) {
+      setPwdForm({ current: "", next: "", confirm: "" });
+      setPwdMessage({ type: "ok", text: "Mot de passe modifie avec succes" });
+    } else {
+      const err = await res.json();
+      setPwdMessage({ type: "error", text: err.error ?? "Erreur" });
+    }
     setLoading(null);
   };
 
@@ -213,6 +333,10 @@ export default function DashboardClient({ initialData, session }: { initialData:
             <SvgIcon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
             Audit et rappels
           </button>
+          <button className={`sidebar-link ${tab === "compte" ? "active" : ""}`} onClick={() => navTo("compte")}>
+            <SvgIcon d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            Mon compte
+          </button>
 
           <div style={{ flex: 1 }} />
 
@@ -297,7 +421,7 @@ export default function DashboardClient({ initialData, session }: { initialData:
                     {data.invoices.slice(0, 5).map((inv) => (
                       <tr key={inv.id}>
                         <td data-label="Reference"><strong>{inv.reference}</strong></td>
-                        <td data-label="Fournisseur">{inv.supplier.name}</td>
+                        <td data-label="Fournisseur">{inv.supplier?.name ?? "-"}</td>
                         <td data-label="Montant" style={{ fontWeight: 600 }}>{fmt(inv.amount)}</td>
                         <td data-label="Echeance">{fmtDate(inv.dueDate)}</td>
                         <td data-label="Statut"><span className={`status-pill ${STATUS_CLASS[inv.status] ?? ""}`}>{STATUS_LABELS[inv.status] ?? inv.status}</span></td>
@@ -315,38 +439,95 @@ export default function DashboardClient({ initialData, session }: { initialData:
           <div className="stack">
             <div className="page-header">
               <h1 className="title">Factures</h1>
-              <p className="subtitle">Workflow : qualifier, valider, payer, reporter, archiver</p>
+              <p className="subtitle">Filtrer, editer, payer, reporter, archiver</p>
             </div>
-            <div className="row" style={{ gap: 12 }}>
-              <input className="input" style={{ flex: "1 1 200px", maxWidth: 260 }} placeholder="Rechercher..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-              <select className="select" style={{ flex: "1 1 160px", maxWidth: 200 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="ALL">Tous les statuts</option>
-                {statuses.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
-              </select>
-              <div className="small muted" style={{ flexBasis: "100%" }}>{filteredInvoices.length} facture(s)</div>
+
+            <div className="card card-inner">
+              <div className="grid grid-3" style={{ gap: 12 }}>
+                <div>
+                  <div className="label">Recherche</div>
+                  <input className="input" placeholder="Reference, fournisseur, notes..." value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }} />
+                </div>
+                <div>
+                  <div className="label">Statut</div>
+                  <select className="select" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
+                    <option value="ALL">Tous</option>
+                    {statuses.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="label">Fournisseur</div>
+                  <select className="select" value={supplierFilter} onChange={(e) => { setSupplierFilter(e.target.value); setPage(1); }}>
+                    <option value="ALL">Tous</option>
+                    {data.suppliers.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="label">Categorie</div>
+                  <select className="select" value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }}>
+                    <option value="ALL">Toutes</option>
+                    {categories.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="label">Echeance du</div>
+                  <input type="date" className="input" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
+                </div>
+                <div>
+                  <div className="label">Echeance au</div>
+                  <input type="date" className="input" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
+                </div>
+              </div>
+              <div className="row" style={{ marginTop: 12, gap: 12 }}>
+                <button className="button secondary sm" onClick={resetFilters}>Reinitialiser</button>
+                <div className="small muted">{filteredInvoices.length} facture(s) - page {page}/{pageCount}</div>
+              </div>
             </div>
+
             <div className="card card-inner">
               <div className="label">Motif de report par defaut</div>
               <input className="input" value={postponeReason} onChange={(e) => setPostponeReason(e.target.value)} style={{ maxWidth: 420, marginBottom: 16 }} />
               <div className="table-responsive">
                 <table className="table">
-                  <thead><tr><th>Reference</th><th>Fournisseur</th><th>Montant</th><th>Echeance</th><th>Statut</th><th>Categorie</th><th>Actions</th></tr></thead>
+                  <thead><tr><th>Reference</th><th>Fournisseur</th><th>Montant TTC</th><th>TVA</th><th>Echeance</th><th>Statut</th><th>Categorie</th><th>Docs</th><th>Actions</th></tr></thead>
                   <tbody>
-                    {filteredInvoices.map((inv) => (
+                    {pagedInvoices.map((inv: any) => (
                       <tr key={inv.id}>
                         <td data-label="Reference"><strong style={{ fontSize: 14 }}>{inv.reference}</strong><div className="tiny muted">{inv.source} - {inv.assignedTo ?? "Non assignee"}</div></td>
-                        <td data-label="Fournisseur" style={{ fontSize: 14 }}>{inv.supplier.name}</td>
-                        <td data-label="Montant" style={{ fontWeight: 600, fontSize: 14 }}>{fmt(inv.amount)}</td>
+                        <td data-label="Fournisseur" style={{ fontSize: 14 }}>{inv.supplier?.name}</td>
+                        <td data-label="Montant" style={{ fontWeight: 600, fontSize: 14 }}>
+                          {fmt(inv.amount)}
+                          {inv.amountHt !== null && inv.vatRate > 0 && <div className="tiny muted">HT {fmt(inv.amountHt)}</div>}
+                        </td>
+                        <td data-label="TVA" style={{ fontSize: 13 }}>{inv.vatRate > 0 ? `${inv.vatRate}%` : "-"}</td>
                         <td data-label="Echeance" style={{ fontSize: 14 }}>{fmtDate(inv.dueDate)}</td>
                         <td data-label="Statut">
                           <span className={`status-pill ${STATUS_CLASS[inv.status] ?? ""}`}>{STATUS_LABELS[inv.status] ?? inv.status}</span>
                           {inv.postponeReason && <div className="tiny muted" style={{ marginTop: 6, maxWidth: 150 }}>{inv.postponeReason}</div>}
                         </td>
                         <td data-label="Categorie"><span className="badge gray">{CATEGORY_LABELS[inv.category] ?? inv.category}</span></td>
+                        <td data-label="Docs">
+                          {inv.documents?.length > 0 ? (
+                            <div className="stack-sm" style={{ gap: 4 }}>
+                              {inv.documents.map((d: any) => (
+                                <div key={d.id} className="row" style={{ gap: 6 }}>
+                                  <a className="tiny" href={`/api/documents/${d.id}`} target="_blank" rel="noopener noreferrer" title={d.filename}>📎 {d.filename.length > 18 ? d.filename.slice(0, 16) + ".." : d.filename}</a>
+                                  <button className="button secondary sm" style={{ padding: "2px 6px", fontSize: 11 }} onClick={() => deleteDoc(d.id)} aria-label="Supprimer">×</button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : <span className="tiny muted">-</span>}
+                          <label className="tiny" style={{ display: "block", marginTop: 4, cursor: "pointer", color: "#3b82f6" }}>
+                            + Ajouter
+                            <input type="file" style={{ display: "none" }} onChange={(e) => { const f = e.target.files?.[0]; if (f) attachToInvoice(inv.id, f); e.target.value = ""; }} />
+                          </label>
+                        </td>
                         <td className="td-actions">
                           <div className="row">
                             {inv.status !== "PAYEE" && inv.status !== "ARCHIVEE" && <button className="button success sm" onClick={() => payInvoice(inv.id)} disabled={loading === inv.id}>Payer</button>}
                             {!["REPORT_DEMANDE", "PAYEE", "ARCHIVEE"].includes(inv.status) && <button className="button warning sm" onClick={() => requestPostpone(inv.id)} disabled={loading === inv.id}>Reporter</button>}
+                            <button className="button secondary sm" onClick={() => setEditingInvoice(inv)}>Editer</button>
+                            {(session.role === "ADMIN" || session.role === "ACCOUNTING") && <button className="button danger sm" onClick={() => setDeletingInvoice(inv)}>Supprimer</button>}
                             <select className="select" value={inv.status} onChange={(e) => changeStatus(inv.id, e.target.value)} style={{ minWidth: 130, fontSize: 13 }}>
                               {statuses.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
                             </select>
@@ -355,47 +536,91 @@ export default function DashboardClient({ initialData, session }: { initialData:
                         </td>
                       </tr>
                     ))}
-                    {filteredInvoices.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", padding: 24 }} className="muted">Aucune facture trouvee.</td></tr>}
+                    {pagedInvoices.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", padding: 24 }} className="muted">Aucune facture.</td></tr>}
                   </tbody>
                 </table>
               </div>
+
+              {pageCount > 1 && (
+                <div className="row" style={{ justifyContent: "center", marginTop: 16, gap: 6 }}>
+                  <button className="button secondary sm" disabled={page === 1} onClick={() => setPage(1)}>«</button>
+                  <button className="button secondary sm" disabled={page === 1} onClick={() => setPage(page - 1)}>Precedent</button>
+                  <span className="small muted">Page {page} / {pageCount}</span>
+                  <button className="button secondary sm" disabled={page === pageCount} onClick={() => setPage(page + 1)}>Suivant</button>
+                  <button className="button secondary sm" disabled={page === pageCount} onClick={() => setPage(pageCount)}>»</button>
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {/* TAB: Nouvelle facture */}
-        {tab === "nouvelle" && (
+        {tab === "nouvelle" && (() => {
+          const amountNum = Number(amount) || 0;
+          const vatNum = Number(vatRate) || 0;
+          const ht = vatNum > 0 ? amountNum / (1 + vatNum / 100) : amountNum;
+          const tva = amountNum - ht;
+          return (
           <div className="stack">
             <div className="page-header">
               <h1 className="title">Nouvelle facture</h1>
-              <p className="subtitle">Saisie manuelle ou import avec OCR simule</p>
+              <p className="subtitle">Saisie avec TVA, notes et document attache</p>
             </div>
-            <div className="grid grid-2">
-              <div className="card card-inner">
-                <div className="section-title">Saisie manuelle</div>
-                <form className="stack-sm" onSubmit={submitInvoice} style={{ marginTop: 14 }}>
-                  <div><div className="label">Reference</div><input className="input" placeholder="FAC-2026-005" value={reference} onChange={(e) => setReference(e.target.value)} /></div>
-                  <div><div className="label">Fournisseur</div><select className="select" value={supplierName} onChange={(e) => setSupplierName(e.target.value)}>{data.suppliers.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>
-                  <div className="grid grid-2">
-                    <div><div className="label">Montant</div><input className="input" type="number" min="0" step="0.01" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
-                    <div><div className="label">Echeance</div><input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></div>
+            <div className="card card-inner">
+              <div className="section-title">Saisie manuelle</div>
+              <form className="stack-sm" onSubmit={submitInvoice} style={{ marginTop: 14 }}>
+                <div className="grid grid-2">
+                  <div><div className="label">Reference *</div><input className="input" placeholder="FAC-2026-005" value={reference} onChange={(e) => setReference(e.target.value)} required minLength={3} /></div>
+                  <div>
+                    <div className="label">Fournisseur *</div>
+                    <input className="input" list="supplier-list" value={supplierName} onChange={(e) => setSupplierName(e.target.value)} placeholder="Nom du fournisseur" required />
+                    <datalist id="supplier-list">{data.suppliers.map((s) => <option key={s.id} value={s.name} />)}</datalist>
                   </div>
-                  <div className="grid grid-2">
-                    <div><div className="label">Categorie</div><select className="select" value={category} onChange={(e) => setCategory(e.target.value)}>{categories.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}</select></div>
-                    <div><div className="label">Source</div><select className="select" value={source} onChange={(e) => setSource(e.target.value)}>{sources.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
+                </div>
+                <div className="grid grid-3">
+                  <div><div className="label">Montant TTC *</div><input className="input" type="number" min="0" step="0.01" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} required /></div>
+                  <div>
+                    <div className="label">Taux TVA</div>
+                    <select className="select" value={vatRate} onChange={(e) => setVatRate(e.target.value)}>
+                      {VAT_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
                   </div>
-                  <button className="button" style={{ marginTop: 8 }} disabled={loading === "invoice"}>{loading === "invoice" ? "Enregistrement..." : "Creer la facture"}</button>
-                </form>
-              </div>
-              <div className="card card-inner">
-                <div className="section-title">Import scan / PDF</div>
-                <p className="small muted" style={{ margin: "8px 0 14px" }}>Le fichier est analyse par OCR simule pour pre-remplir les champs.</p>
-                <input className="input" type="file" accept="image/*,.pdf" onChange={uploadFile} disabled={loading === "upload"} />
-                {uploadMessage && <div className="badge blue" style={{ marginTop: 12, whiteSpace: "normal", padding: "8px 12px" }}>{uploadMessage}</div>}
-              </div>
+                  <div><div className="label">Echeance *</div><input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required /></div>
+                </div>
+                {amountNum > 0 && vatNum > 0 && (
+                  <div className="tiny muted" style={{ background: "#f8fafc", padding: "8px 12px", borderRadius: 8 }}>
+                    HT: <strong>{fmt(ht)}</strong> · TVA: <strong>{fmt(tva)}</strong> · TTC: <strong>{fmt(amountNum)}</strong>
+                  </div>
+                )}
+                <div className="grid grid-2">
+                  <div><div className="label">Categorie</div><select className="select" value={category} onChange={(e) => setCategory(e.target.value)}>{categories.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}</select></div>
+                  <div><div className="label">Source</div><select className="select" value={source} onChange={(e) => setSource(e.target.value)}>{sources.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
+                </div>
+                <div>
+                  <div className="label">Notes (optionnel)</div>
+                  <textarea className="textarea" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Commentaire, numero de commande, etc." maxLength={500} />
+                </div>
+                <div>
+                  <div className="label">Document attache (optionnel, PDF/image max 20 Mo)</div>
+                  <input className="input" type="file" accept="image/*,.pdf" onChange={(e) => setAttachFile(e.target.files?.[0] ?? null)} />
+                  {attachFile && <div className="tiny muted" style={{ marginTop: 4 }}>📎 {attachFile.name} ({Math.round(attachFile.size / 1024)} Ko)</div>}
+                </div>
+                <div className="row" style={{ marginTop: 8 }}>
+                  <button className="button" disabled={loading === "invoice"}>{loading === "invoice" ? "Enregistrement..." : "Creer la facture"}</button>
+                  <button type="button" className="button secondary" onClick={clearForm}>Vider</button>
+                </div>
+              </form>
+            </div>
+
+            <div className="card card-inner">
+              <div className="section-title">Import rapide avec OCR (experimental)</div>
+              <p className="small muted" style={{ margin: "8px 0 14px" }}>Fichier analyse automatiquement (simulation). Pour une vraie facture, utilisez le formulaire ci-dessus.</p>
+              <input className="input" type="file" accept="image/*,.pdf" onChange={uploadFile} disabled={loading === "upload"} />
+              {uploadMessage && <div className="badge blue" style={{ marginTop: 12, whiteSpace: "normal", padding: "8px 12px" }}>{uploadMessage}</div>}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* TAB: Budget */}
         {tab === "budget" && (
@@ -495,7 +720,147 @@ export default function DashboardClient({ initialData, session }: { initialData:
             </div>
           </div>
         )}
+
+        {/* TAB: Compte */}
+        {tab === "compte" && (
+          <div className="stack">
+            <div className="page-header">
+              <h1 className="title">Mon compte</h1>
+              <p className="subtitle">Informations et mot de passe</p>
+            </div>
+            <div className="grid grid-2">
+              <div className="card card-inner">
+                <div className="section-title">Informations</div>
+                <div className="stack-sm" style={{ marginTop: 12 }}>
+                  <div><div className="label">Nom</div><div>{session.fullName}</div></div>
+                  <div><div className="label">Email</div><div>{session.email}</div></div>
+                  <div><div className="label">Role</div><div><span className="badge blue">{ROLE_LABELS[session.role] ?? session.role}</span></div></div>
+                </div>
+              </div>
+              <div className="card card-inner">
+                <div className="section-title">Changer mon mot de passe</div>
+                <form className="stack-sm" onSubmit={changePassword} style={{ marginTop: 12 }}>
+                  <div><div className="label">Mot de passe actuel</div><input className="input" type="password" value={pwdForm.current} onChange={(e) => setPwdForm((f) => ({ ...f, current: e.target.value }))} required autoComplete="current-password" /></div>
+                  <div><div className="label">Nouveau mot de passe (min 8 caracteres)</div><input className="input" type="password" value={pwdForm.next} onChange={(e) => setPwdForm((f) => ({ ...f, next: e.target.value }))} required minLength={8} autoComplete="new-password" /></div>
+                  <div><div className="label">Confirmer</div><input className="input" type="password" value={pwdForm.confirm} onChange={(e) => setPwdForm((f) => ({ ...f, confirm: e.target.value }))} required minLength={8} autoComplete="new-password" /></div>
+                  {pwdMessage && <div className={`badge ${pwdMessage.type === "ok" ? "green" : "red"}`} style={{ padding: "8px 12px" }}>{pwdMessage.text}</div>}
+                  <button className="button" disabled={loading === "pwd"}>{loading === "pwd" ? "..." : "Enregistrer"}</button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* Modal: Edit invoice */}
+      {editingInvoice && (
+        <EditInvoiceModal
+          invoice={editingInvoice}
+          suppliers={data.suppliers}
+          onClose={() => setEditingInvoice(null)}
+          onSave={saveInvoiceEdit}
+          loading={loading === "edit"}
+          fmt={fmt}
+        />
+      )}
+
+      {/* Modal: Delete confirmation */}
+      {deletingInvoice && (
+        <div className="modal-overlay" onClick={() => setDeletingInvoice(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-title">Supprimer cette facture ?</div>
+            <p className="small" style={{ marginTop: 12 }}>
+              La facture <strong>{deletingInvoice.reference}</strong> ({deletingInvoice.supplier?.name}, {fmt(deletingInvoice.amount)}) sera definitivement supprimee. Cette action est irreversible.
+            </p>
+            <div className="row" style={{ marginTop: 20, justifyContent: "flex-end" }}>
+              <button className="button secondary" onClick={() => setDeletingInvoice(null)}>Annuler</button>
+              <button className="button danger" onClick={confirmDelete} disabled={loading === "delete"}>{loading === "delete" ? "Suppression..." : "Supprimer definitivement"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EditInvoiceModal({ invoice, suppliers, onClose, onSave, loading, fmt }: {
+  invoice: any; suppliers: any[]; onClose: () => void; onSave: (p: any) => void; loading: boolean; fmt: (v: number) => string;
+}) {
+  const [form, setForm] = useState({
+    reference: invoice.reference,
+    supplierName: invoice.supplier?.name ?? "",
+    amount: String(invoice.amount),
+    vatRate: String(invoice.vatRate ?? 0),
+    dueDate: invoice.dueDate.slice(0, 10),
+    category: invoice.category,
+    source: invoice.source,
+    notes: invoice.notes ?? "",
+  });
+
+  const amountNum = Number(form.amount) || 0;
+  const vatNum = Number(form.vatRate) || 0;
+  const ht = vatNum > 0 ? amountNum / (1 + vatNum / 100) : amountNum;
+  const tva = amountNum - ht;
+
+  const submit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    onSave({
+      reference: form.reference,
+      supplierName: form.supplierName,
+      amount: Number(form.amount),
+      vatRate: Number(form.vatRate),
+      dueDate: form.dueDate,
+      category: form.category,
+      source: form.source,
+      notes: form.notes || null,
+    });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="space-between">
+          <div className="section-title">Modifier la facture</div>
+          <button className="button secondary sm" onClick={onClose} aria-label="Fermer">×</button>
+        </div>
+        <form className="stack-sm" onSubmit={submit} style={{ marginTop: 16 }}>
+          <div className="grid grid-2">
+            <div><div className="label">Reference</div><input className="input" value={form.reference} onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))} required /></div>
+            <div>
+              <div className="label">Fournisseur</div>
+              <input className="input" list="edit-supplier-list" value={form.supplierName} onChange={(e) => setForm((f) => ({ ...f, supplierName: e.target.value }))} required />
+              <datalist id="edit-supplier-list">{suppliers.map((s) => <option key={s.id} value={s.name} />)}</datalist>
+            </div>
+          </div>
+          <div className="grid grid-3">
+            <div><div className="label">Montant TTC</div><input className="input" type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} required /></div>
+            <div>
+              <div className="label">Taux TVA</div>
+              <select className="select" value={form.vatRate} onChange={(e) => setForm((f) => ({ ...f, vatRate: e.target.value }))}>
+                {VAT_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </div>
+            <div><div className="label">Echeance</div><input className="input" type="date" value={form.dueDate} onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))} required /></div>
+          </div>
+          {amountNum > 0 && vatNum > 0 && (
+            <div className="tiny muted" style={{ background: "#f8fafc", padding: "8px 12px", borderRadius: 8 }}>
+              HT: <strong>{fmt(ht)}</strong> · TVA: <strong>{fmt(tva)}</strong> · TTC: <strong>{fmt(amountNum)}</strong>
+            </div>
+          )}
+          <div className="grid grid-2">
+            <div><div className="label">Categorie</div><select className="select" value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}>{categories.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}</select></div>
+            <div><div className="label">Source</div><select className="select" value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))}>{sources.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
+          </div>
+          <div>
+            <div className="label">Notes</div>
+            <textarea className="textarea" rows={2} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} maxLength={500} />
+          </div>
+          <div className="row" style={{ marginTop: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="button secondary" onClick={onClose}>Annuler</button>
+            <button className="button" disabled={loading}>{loading ? "Enregistrement..." : "Enregistrer"}</button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

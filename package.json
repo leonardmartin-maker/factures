@@ -8,8 +8,10 @@
     "start": "next start",
     "lint": "next lint",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:seed": "tsx prisma/seed.ts",
+    "bootstrap": "tsx prisma/bootstrap.ts",
+    "prod:deploy": "prisma migrate deploy && prisma generate && tsx prisma/bootstrap.ts && next build"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

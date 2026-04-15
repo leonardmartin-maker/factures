@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { listInvoices } from "@/lib/repositories";
 
+export const dynamic = "force-dynamic";
+
 function escapeCsv(value: string | number | null) {
   const normalized = value === null ? "" : String(value);
   return `"${normalized.replace(/"/g, '""')}"`;
@@ -9,11 +11,14 @@ function escapeCsv(value: string | number | null) {
 export async function GET() {
   const invoices = await listInvoices();
   const lines = [
-    ["reference", "supplier", "amount", "currency", "status", "category", "dueDate", "paymentDate"].map(escapeCsv).join(","),
+    ["reference", "supplier", "amount_ttc", "amount_ht", "vat_rate", "vat_amount", "currency", "status", "category", "dueDate", "paymentDate"].map(escapeCsv).join(","),
     ...invoices.map((invoice) => [
       invoice.reference,
-      invoice.supplier.name,
+      invoice.supplier?.name ?? "",
       invoice.amount,
+      invoice.amountHt ?? "",
+      invoice.vatRate ?? 0,
+      invoice.vatAmount ?? "",
       invoice.currency,
       invoice.status,
       invoice.category,

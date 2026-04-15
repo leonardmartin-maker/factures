@@ -36,7 +36,10 @@ model Invoice {
   supplierId       String
   supplier         Supplier          @relation(fields: [supplierId], references: [id])
   amount           Float
-  currency         String            @default("EUR")
+  amountHt         Float?
+  vatRate          Float             @default(0)
+  vatAmount        Float?
+  currency         String            @default("CHF")
   dueDate          DateTime
   paymentDate      DateTime?
   status           String            @default("A_QUALIFIER")
