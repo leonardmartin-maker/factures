@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { SessionPayload } from "@/lib/auth";
 import type { DashboardData } from "@/lib/dashboard";
@@ -33,7 +33,7 @@ const CURRENCIES = [
   { code: "GBP", label: "GBP - Livre sterling", locale: "en-GB" },
 ];
 
-type Tab = "dashboard" | "factures" | "nouvelle" | "budget" | "fournisseurs" | "audit" | "compte";
+type Tab = "dashboard" | "factures" | "nouvelle" | "budget" | "fournisseurs" | "equipe" | "audit" | "compte";
 
 const VAT_PRESETS = [
   { value: 0, label: "0% (hors taxe)" },
@@ -43,6 +43,22 @@ const VAT_PRESETS = [
   { value: 8.1, label: "8.1% (CH standard)" },
   { value: 20, label: "20% (FR standard)" },
 ];
+
+const PAYMENT_METHODS = [
+  { value: "", label: "-" },
+  { value: "VIREMENT", label: "Virement" },
+  { value: "CARTE", label: "Carte bancaire" },
+  { value: "PRELEVEMENT", label: "Prelevement" },
+  { value: "ESPECES", label: "Especes" },
+  { value: "CHEQUE", label: "Cheque" },
+  { value: "AUTRE", label: "Autre" },
+];
+const PAYMENT_METHOD_LABELS: Record<string, string> = Object.fromEntries(PAYMENT_METHODS.map((p) => [p.value, p.label]));
+
+function fmtCurrency(v: number, code: string) {
+  const curr = CURRENCIES.find((c) => c.code === code) ?? CURRENCIES[0];
+  return new Intl.NumberFormat(curr.locale, { style: "currency", currency: curr.code }).format(v);
+}
 
 function getSavedCurrency(): string {
   if (typeof window === "undefined") return "CHF";
@@ -75,13 +91,30 @@ export default function DashboardClient({ initialData, session }: { initialData:
   };
   const [supplierName, setSupplierName] = useState(initialData.suppliers[0]?.name ?? "");
   const [reference, setReference] = useState("");
+  const [supplierReference, setSupplierReference] = useState("");
   const [amount, setAmount] = useState("");
   const [vatRate, setVatRate] = useState("8.1");
+  const [invoiceCurrency, setInvoiceCurrency] = useState("CHF");
+  const [paymentMethod, setPaymentMethod] = useState("VIREMENT");
+  const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
   const [dueDate, setDueDate] = useState(new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10));
   const [category, setCategory] = useState("ACHATS");
   const [source, setSource] = useState("PDF");
   const [attachFile, setAttachFile] = useState<File | null>(null);
+  const [autoRef, setAutoRef] = useState(true);
+  const [nextRefPreview, setNextRefPreview] = useState<string | null>(null);
+
+  // Suppliers CRUD state
+  const [editingSupplier, setEditingSupplier] = useState<any>(null);
+  const [creatingSupplier, setCreatingSupplier] = useState(false);
+  const [deletingSupplier, setDeletingSupplier] = useState<any>(null);
+
+  // Users CRUD state
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [editingUser, setEditingUser] = useState<any>(null);
+  const [resettingUser, setResettingUser] = useState<any>(null);
+  const [deletingUser, setDeletingUser] = useState<any>(null);
   const [postponeReason, setPostponeReason] = useState("Besoin de decalage de tresorerie");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
@@ -144,29 +177,108 @@ export default function DashboardClient({ initialData, session }: { initialData:
   };
 
   const clearForm = () => {
-    setReference(""); setAmount(""); setNotes(""); setAttachFile(null);
+    setReference(""); setSupplierReference(""); setAmount(""); setNotes(""); setAttachFile(null);
+    setIssueDate(new Date().toISOString().slice(0, 10));
+    setDueDate(new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10));
   };
+
+  // Preview du prochain numero auto
+  const fetchNextRef = async () => {
+    try {
+      const res = await fetch("/api/invoices/next-number", { cache: "no-store" });
+      if (res.ok) {
+        const { preview } = await res.json();
+        setNextRefPreview(preview);
+      }
+    } catch {}
+  };
+  useEffect(() => {
+    if (tab === "nouvelle" && autoRef) fetchNextRef();
+  }, [tab, autoRef]);
 
   const submitInvoice = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault(); setLoading("invoice");
-    const res = await fetch("/api/invoices", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reference, supplierName, amount: Number(amount), vatRate: Number(vatRate), dueDate, category, source, notes: notes || null }),
-    });
+    const payload: any = {
+      supplierName,
+      supplierReference: supplierReference || null,
+      amount: Number(amount),
+      vatRate: Number(vatRate),
+      currency: invoiceCurrency,
+      issueDate: issueDate || null,
+      dueDate,
+      paymentMethod: paymentMethod || null,
+      category, source,
+      notes: notes || null,
+    };
+    if (!autoRef && reference.trim()) payload.reference = reference.trim();
+    const res = await fetch("/api/invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if (res.ok) {
       const { invoice } = await res.json();
-      // Optional attachment
       if (attachFile && invoice?.id) {
         const fd = new FormData(); fd.append("file", attachFile); fd.append("invoiceId", invoice.id);
         await fetch("/api/upload", { method: "POST", body: fd });
       }
       clearForm();
-      await refreshData(); showMessage("Facture creee"); setTab("factures");
+      await refreshData(); showMessage(`Facture ${invoice.reference} creee`); setTab("factures");
     } else {
       const err = await res.json();
       showMessage(err.error ?? "Erreur creation");
     }
+    setLoading(null);
+  };
+
+  // Suppliers CRUD
+  const saveSupplier = async (data: any, id?: string) => {
+    setLoading("supplier");
+    const url = id ? `/api/suppliers/${id}` : "/api/suppliers";
+    const res = await fetch(url, { method: id ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    if (res.ok) {
+      setEditingSupplier(null); setCreatingSupplier(false);
+      await refreshData(); showMessage(id ? "Fournisseur modifie" : "Fournisseur cree");
+    } else {
+      const err = await res.json(); showMessage(err.error ?? "Erreur");
+    }
+    setLoading(null);
+  };
+
+  const confirmDeleteSupplier = async () => {
+    if (!deletingSupplier) return;
+    setLoading("delete-supplier");
+    const res = await fetch(`/api/suppliers/${deletingSupplier.id}`, { method: "DELETE" });
+    if (res.ok) { setDeletingSupplier(null); await refreshData(); showMessage("Fournisseur supprime"); }
+    else { const err = await res.json(); showMessage(err.error ?? "Erreur"); }
+    setLoading(null);
+  };
+
+  // Users CRUD
+  const saveUser = async (data: any, id?: string) => {
+    setLoading("user");
+    const url = id ? `/api/users/${id}` : "/api/users";
+    const res = await fetch(url, { method: id ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    if (res.ok) {
+      setEditingUser(null); setCreatingUser(false);
+      await refreshData(); showMessage(id ? "Utilisateur modifie" : "Utilisateur cree");
+    } else {
+      const err = await res.json(); showMessage(err.error ?? "Erreur");
+    }
+    setLoading(null);
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!deletingUser) return;
+    setLoading("delete-user");
+    const res = await fetch(`/api/users/${deletingUser.id}`, { method: "DELETE" });
+    if (res.ok) { setDeletingUser(null); await refreshData(); showMessage("Utilisateur supprime"); }
+    else { const err = await res.json(); showMessage(err.error ?? "Erreur"); }
+    setLoading(null);
+  };
+
+  const resetUserPwd = async (newPassword: string) => {
+    if (!resettingUser) return;
+    setLoading("reset-pwd");
+    const res = await fetch(`/api/users/${resettingUser.id}/reset-password`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ newPassword }) });
+    if (res.ok) { setResettingUser(null); showMessage("Mot de passe reinitialise"); }
+    else { const err = await res.json(); showMessage(err.error ?? "Erreur"); }
     setLoading(null);
   };
 
@@ -329,6 +441,12 @@ export default function DashboardClient({ initialData, session }: { initialData:
             <SvgIcon d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
             Fournisseurs
           </button>
+          {session.role === "ADMIN" && (
+            <button className={`sidebar-link ${tab === "equipe" ? "active" : ""}`} onClick={() => navTo("equipe")}>
+              <SvgIcon d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+              Equipe
+            </button>
+          )}
           <button className={`sidebar-link ${tab === "audit" ? "active" : ""}`} onClick={() => navTo("audit")}>
             <SvgIcon d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
             Audit et rappels
@@ -418,11 +536,11 @@ export default function DashboardClient({ initialData, session }: { initialData:
                 <table className="table">
                   <thead><tr><th>Reference</th><th>Fournisseur</th><th>Montant</th><th>Echeance</th><th>Statut</th></tr></thead>
                   <tbody>
-                    {data.invoices.slice(0, 5).map((inv) => (
+                    {data.invoices.slice(0, 5).map((inv: any) => (
                       <tr key={inv.id}>
                         <td data-label="Reference"><strong>{inv.reference}</strong></td>
                         <td data-label="Fournisseur">{inv.supplier?.name ?? "-"}</td>
-                        <td data-label="Montant" style={{ fontWeight: 600 }}>{fmt(inv.amount)}</td>
+                        <td data-label="Montant" style={{ fontWeight: 600 }}>{fmtCurrency(inv.amount, inv.currency)}</td>
                         <td data-label="Echeance">{fmtDate(inv.dueDate)}</td>
                         <td data-label="Statut"><span className={`status-pill ${STATUS_CLASS[inv.status] ?? ""}`}>{STATUS_LABELS[inv.status] ?? inv.status}</span></td>
                       </tr>
@@ -493,14 +611,24 @@ export default function DashboardClient({ initialData, session }: { initialData:
                   <tbody>
                     {pagedInvoices.map((inv: any) => (
                       <tr key={inv.id}>
-                        <td data-label="Reference"><strong style={{ fontSize: 14 }}>{inv.reference}</strong><div className="tiny muted">{inv.source} - {inv.assignedTo ?? "Non assignee"}</div></td>
-                        <td data-label="Fournisseur" style={{ fontSize: 14 }}>{inv.supplier?.name}</td>
+                        <td data-label="Reference">
+                          <strong style={{ fontSize: 14 }}>{inv.reference}</strong>
+                          {inv.supplierReference && <div className="tiny muted">Ref fourn.: {inv.supplierReference}</div>}
+                          <div className="tiny muted">{inv.source} - {inv.assignedTo ?? "Non assignee"}</div>
+                        </td>
+                        <td data-label="Fournisseur" style={{ fontSize: 14 }}>
+                          {inv.supplier?.name}
+                          {inv.paymentMethod && <div className="tiny muted">{PAYMENT_METHOD_LABELS[inv.paymentMethod] ?? inv.paymentMethod}</div>}
+                        </td>
                         <td data-label="Montant" style={{ fontWeight: 600, fontSize: 14 }}>
-                          {fmt(inv.amount)}
-                          {inv.amountHt !== null && inv.vatRate > 0 && <div className="tiny muted">HT {fmt(inv.amountHt)}</div>}
+                          {fmtCurrency(inv.amount, inv.currency)}
+                          {inv.amountHt !== null && inv.vatRate > 0 && <div className="tiny muted">HT {fmtCurrency(inv.amountHt, inv.currency)}</div>}
                         </td>
                         <td data-label="TVA" style={{ fontSize: 13 }}>{inv.vatRate > 0 ? `${inv.vatRate}%` : "-"}</td>
-                        <td data-label="Echeance" style={{ fontSize: 14 }}>{fmtDate(inv.dueDate)}</td>
+                        <td data-label="Echeance" style={{ fontSize: 14 }}>
+                          {fmtDate(inv.dueDate)}
+                          {inv.issueDate && <div className="tiny muted">Emise {fmtDate(inv.issueDate)}</div>}
+                        </td>
                         <td data-label="Statut">
                           <span className={`status-pill ${STATUS_CLASS[inv.status] ?? ""}`}>{STATUS_LABELS[inv.status] ?? inv.status}</span>
                           {inv.postponeReason && <div className="tiny muted" style={{ marginTop: 6, maxWidth: 150 }}>{inv.postponeReason}</div>}
@@ -560,43 +688,92 @@ export default function DashboardClient({ initialData, session }: { initialData:
           const vatNum = Number(vatRate) || 0;
           const ht = vatNum > 0 ? amountNum / (1 + vatNum / 100) : amountNum;
           const tva = amountNum - ht;
+          const formFmt = (v: number) => fmtCurrency(v, invoiceCurrency);
           return (
           <div className="stack">
             <div className="page-header">
               <h1 className="title">Nouvelle facture</h1>
-              <p className="subtitle">Saisie avec TVA, notes et document attache</p>
+              <p className="subtitle">Tous les champs pour une comptabilite propre</p>
             </div>
             <div className="card card-inner">
-              <div className="section-title">Saisie manuelle</div>
-              <form className="stack-sm" onSubmit={submitInvoice} style={{ marginTop: 14 }}>
+              <form className="stack-sm" onSubmit={submitInvoice}>
+                <div className="section-title">Reference</div>
+                <div className="row" style={{ gap: 12, alignItems: "flex-end" }}>
+                  <label className="tiny" style={{ display: "flex", gap: 6, alignItems: "center", minHeight: 44 }}>
+                    <input type="checkbox" checked={autoRef} onChange={(e) => { setAutoRef(e.target.checked); if (e.target.checked) fetchNextRef(); }} />
+                    Numerotation automatique
+                  </label>
+                  {autoRef ? (
+                    <div style={{ flex: 1 }}>
+                      <div className="label">Numero qui sera genere</div>
+                      <input className="input" readOnly value={nextRefPreview ?? "(sera genere)"} style={{ background: "#f8fafc" }} onFocus={fetchNextRef} />
+                    </div>
+                  ) : (
+                    <div style={{ flex: 1 }}>
+                      <div className="label">Reference *</div>
+                      <input className="input" placeholder="FAC-2026-005" value={reference} onChange={(e) => setReference(e.target.value)} required minLength={3} />
+                    </div>
+                  )}
+                </div>
+
+                <hr className="divider" style={{ margin: "12px 0" }} />
+                <div className="section-title">Fournisseur</div>
                 <div className="grid grid-2">
-                  <div><div className="label">Reference *</div><input className="input" placeholder="FAC-2026-005" value={reference} onChange={(e) => setReference(e.target.value)} required minLength={3} /></div>
                   <div>
-                    <div className="label">Fournisseur *</div>
+                    <div className="label">Nom *</div>
                     <input className="input" list="supplier-list" value={supplierName} onChange={(e) => setSupplierName(e.target.value)} placeholder="Nom du fournisseur" required />
                     <datalist id="supplier-list">{data.suppliers.map((s) => <option key={s.id} value={s.name} />)}</datalist>
                   </div>
+                  <div>
+                    <div className="label">N° de facture fournisseur</div>
+                    <input className="input" value={supplierReference} onChange={(e) => setSupplierReference(e.target.value)} placeholder="Ex: INV-2026-334" />
+                  </div>
                 </div>
+
+                <hr className="divider" style={{ margin: "12px 0" }} />
+                <div className="section-title">Montant et TVA</div>
                 <div className="grid grid-3">
                   <div><div className="label">Montant TTC *</div><input className="input" type="number" min="0" step="0.01" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} required /></div>
+                  <div>
+                    <div className="label">Devise</div>
+                    <select className="select" value={invoiceCurrency} onChange={(e) => setInvoiceCurrency(e.target.value)}>
+                      {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+                    </select>
+                  </div>
                   <div>
                     <div className="label">Taux TVA</div>
                     <select className="select" value={vatRate} onChange={(e) => setVatRate(e.target.value)}>
                       {VAT_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                     </select>
                   </div>
-                  <div><div className="label">Echeance *</div><input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required /></div>
                 </div>
                 {amountNum > 0 && vatNum > 0 && (
-                  <div className="tiny muted" style={{ background: "#f8fafc", padding: "8px 12px", borderRadius: 8 }}>
-                    HT: <strong>{fmt(ht)}</strong> · TVA: <strong>{fmt(tva)}</strong> · TTC: <strong>{fmt(amountNum)}</strong>
+                  <div className="tiny" style={{ background: "#f0f9ff", padding: "10px 14px", borderRadius: 8, border: "1px solid #bae6fd" }}>
+                    HT : <strong>{formFmt(ht)}</strong> · TVA ({vatNum}%) : <strong>{formFmt(tva)}</strong> · TTC : <strong>{formFmt(amountNum)}</strong>
                   </div>
                 )}
+
+                <hr className="divider" style={{ margin: "12px 0" }} />
+                <div className="section-title">Dates et paiement</div>
+                <div className="grid grid-3">
+                  <div><div className="label">Date d'emission</div><input className="input" type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} /></div>
+                  <div><div className="label">Date d'echeance *</div><input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required /></div>
+                  <div>
+                    <div className="label">Mode de paiement</div>
+                    <select className="select" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+                      {PAYMENT_METHODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                <hr className="divider" style={{ margin: "12px 0" }} />
+                <div className="section-title">Classification</div>
                 <div className="grid grid-2">
                   <div><div className="label">Categorie</div><select className="select" value={category} onChange={(e) => setCategory(e.target.value)}>{categories.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}</select></div>
                   <div><div className="label">Source</div><select className="select" value={source} onChange={(e) => setSource(e.target.value)}>{sources.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
                 </div>
-                <div>
+
+                <div style={{ marginTop: 12 }}>
                   <div className="label">Notes (optionnel)</div>
                   <textarea className="textarea" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Commentaire, numero de commande, etc." maxLength={500} />
                 </div>
@@ -605,7 +782,7 @@ export default function DashboardClient({ initialData, session }: { initialData:
                   <input className="input" type="file" accept="image/*,.pdf" onChange={(e) => setAttachFile(e.target.files?.[0] ?? null)} />
                   {attachFile && <div className="tiny muted" style={{ marginTop: 4 }}>📎 {attachFile.name} ({Math.round(attachFile.size / 1024)} Ko)</div>}
                 </div>
-                <div className="row" style={{ marginTop: 8 }}>
+                <div className="row" style={{ marginTop: 16 }}>
                   <button className="button" disabled={loading === "invoice"}>{loading === "invoice" ? "Enregistrement..." : "Creer la facture"}</button>
                   <button type="button" className="button secondary" onClick={clearForm}>Vider</button>
                 </div>
@@ -665,20 +842,88 @@ export default function DashboardClient({ initialData, session }: { initialData:
           <div className="stack">
             <div className="page-header">
               <h1 className="title">Fournisseurs</h1>
-              <p className="subtitle">Liste des fournisseurs enregistres</p>
+              <p className="subtitle">Coordonnees, IBAN, notes par fournisseur</p>
             </div>
             <div className="card card-inner">
+              <div className="space-between" style={{ marginBottom: 12 }}>
+                <div className="small muted">{data.suppliers.length} fournisseur(s)</div>
+                <button className="button" onClick={() => setCreatingSupplier(true)}>+ Nouveau fournisseur</button>
+              </div>
               <div className="table-responsive">
                 <table className="table">
-                  <thead><tr><th>Nom</th><th>Email</th><th>Categorie</th></tr></thead>
+                  <thead><tr><th>Nom</th><th>Contact</th><th>IBAN</th><th>TVA</th><th>Actions</th></tr></thead>
                   <tbody>
-                    {data.suppliers.map((s) => (
+                    {data.suppliers.map((s: any) => (
                       <tr key={s.id}>
-                        <td data-label="Nom"><strong>{s.name}</strong></td>
-                        <td data-label="Email" className="muted">{s.email ?? "-"}</td>
-                        <td data-label="Categorie"><span className="badge gray">{s.category ?? "-"}</span></td>
+                        <td data-label="Nom">
+                          <strong>{s.name}</strong>
+                          {s.contactName && <div className="tiny muted">{s.contactName}</div>}
+                          {s.category && <div className="tiny"><span className="badge gray">{s.category}</span></div>}
+                        </td>
+                        <td data-label="Contact">
+                          {s.email && <div className="small">✉ {s.email}</div>}
+                          {s.phone && <div className="small">☏ {s.phone}</div>}
+                          {s.address && <div className="tiny muted">{s.address}</div>}
+                          {!s.email && !s.phone && <span className="muted">-</span>}
+                        </td>
+                        <td data-label="IBAN">
+                          {s.iban ? <code style={{ fontSize: 11 }}>{s.iban}</code> : <span className="muted">-</span>}
+                          {s.bic && <div className="tiny muted">BIC : {s.bic}</div>}
+                        </td>
+                        <td data-label="TVA">{s.vatNumber ? <code style={{ fontSize: 11 }}>{s.vatNumber}</code> : <span className="muted">-</span>}</td>
+                        <td className="td-actions">
+                          <div className="row">
+                            <button className="button secondary sm" onClick={() => setEditingSupplier(s)}>Editer</button>
+                            {(session.role === "ADMIN" || session.role === "ACCOUNTING") && <button className="button danger sm" onClick={() => setDeletingSupplier(s)}>Supprimer</button>}
+                          </div>
+                        </td>
                       </tr>
                     ))}
+                    {data.suppliers.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", padding: 24 }} className="muted">Aucun fournisseur. Creez-en un.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: Equipe */}
+        {tab === "equipe" && session.role === "ADMIN" && (
+          <div className="stack">
+            <div className="page-header">
+              <h1 className="title">Equipe</h1>
+              <p className="subtitle">Gestion des utilisateurs et des roles</p>
+            </div>
+            <div className="card card-inner">
+              <div className="space-between" style={{ marginBottom: 12 }}>
+                <div className="small muted">{data.users.length} utilisateur(s)</div>
+                <button className="button" onClick={() => setCreatingUser(true)}>+ Inviter un collaborateur</button>
+              </div>
+              <div className="table-responsive">
+                <table className="table">
+                  <thead><tr><th>Nom</th><th>Email</th><th>Role</th><th>Cree le</th><th>Actions</th></tr></thead>
+                  <tbody>
+                    {data.users.map((u: any) => {
+                      const isMe = u.id === session.userId;
+                      return (
+                        <tr key={u.id}>
+                          <td data-label="Nom">
+                            <strong>{u.fullName}</strong>
+                            {isMe && <span className="badge blue" style={{ marginLeft: 8, fontSize: 10 }}>Moi</span>}
+                          </td>
+                          <td data-label="Email" className="small">{u.email}</td>
+                          <td data-label="Role"><span className="badge gray">{ROLE_LABELS[u.role] ?? u.role}</span></td>
+                          <td data-label="Cree" className="small">{fmtDate(u.createdAt)}</td>
+                          <td className="td-actions">
+                            <div className="row">
+                              <button className="button secondary sm" onClick={() => setEditingUser(u)}>Editer</button>
+                              <button className="button secondary sm" onClick={() => setResettingUser(u)}>Reset mdp</button>
+                              {!isMe && <button className="button danger sm" onClick={() => setDeletingUser(u)}>Supprimer</button>}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -760,17 +1005,16 @@ export default function DashboardClient({ initialData, session }: { initialData:
           onClose={() => setEditingInvoice(null)}
           onSave={saveInvoiceEdit}
           loading={loading === "edit"}
-          fmt={fmt}
         />
       )}
 
-      {/* Modal: Delete confirmation */}
+      {/* Modal: Delete invoice confirmation */}
       {deletingInvoice && (
         <div className="modal-overlay" onClick={() => setDeletingInvoice(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="section-title">Supprimer cette facture ?</div>
             <p className="small" style={{ marginTop: 12 }}>
-              La facture <strong>{deletingInvoice.reference}</strong> ({deletingInvoice.supplier?.name}, {fmt(deletingInvoice.amount)}) sera definitivement supprimee. Cette action est irreversible.
+              La facture <strong>{deletingInvoice.reference}</strong> ({deletingInvoice.supplier?.name}, {fmtCurrency(deletingInvoice.amount, deletingInvoice.currency)}) sera definitivement supprimee. Cette action est irreversible.
             </p>
             <div className="row" style={{ marginTop: 20, justifyContent: "flex-end" }}>
               <button className="button secondary" onClick={() => setDeletingInvoice(null)}>Annuler</button>
@@ -779,19 +1023,238 @@ export default function DashboardClient({ initialData, session }: { initialData:
           </div>
         </div>
       )}
+
+      {/* Modal: Supplier create/edit */}
+      {(creatingSupplier || editingSupplier) && (
+        <SupplierModal
+          supplier={editingSupplier}
+          onClose={() => { setCreatingSupplier(false); setEditingSupplier(null); }}
+          onSave={(data) => saveSupplier(data, editingSupplier?.id)}
+          loading={loading === "supplier"}
+        />
+      )}
+
+      {/* Modal: Supplier delete */}
+      {deletingSupplier && (
+        <div className="modal-overlay" onClick={() => setDeletingSupplier(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-title">Supprimer le fournisseur ?</div>
+            <p className="small" style={{ marginTop: 12 }}><strong>{deletingSupplier.name}</strong> sera supprime. Si des factures utilisent encore ce fournisseur, l'operation sera refusee.</p>
+            <div className="row" style={{ marginTop: 20, justifyContent: "flex-end" }}>
+              <button className="button secondary" onClick={() => setDeletingSupplier(null)}>Annuler</button>
+              <button className="button danger" onClick={confirmDeleteSupplier} disabled={loading === "delete-supplier"}>{loading === "delete-supplier" ? "..." : "Supprimer"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: User create/edit */}
+      {(creatingUser || editingUser) && (
+        <UserModal
+          user={editingUser}
+          onClose={() => { setCreatingUser(false); setEditingUser(null); }}
+          onSave={(data) => saveUser(data, editingUser?.id)}
+          loading={loading === "user"}
+        />
+      )}
+
+      {/* Modal: Reset password */}
+      {resettingUser && (
+        <ResetPasswordModal
+          user={resettingUser}
+          onClose={() => setResettingUser(null)}
+          onSave={resetUserPwd}
+          loading={loading === "reset-pwd"}
+        />
+      )}
+
+      {/* Modal: User delete */}
+      {deletingUser && (
+        <div className="modal-overlay" onClick={() => setDeletingUser(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="section-title">Supprimer l'utilisateur ?</div>
+            <p className="small" style={{ marginTop: 12 }}><strong>{deletingUser.fullName}</strong> ({deletingUser.email}) sera supprime. Les factures qui lui etaient assignees seront desassignees.</p>
+            <div className="row" style={{ marginTop: 20, justifyContent: "flex-end" }}>
+              <button className="button secondary" onClick={() => setDeletingUser(null)}>Annuler</button>
+              <button className="button danger" onClick={confirmDeleteUser} disabled={loading === "delete-user"}>{loading === "delete-user" ? "..." : "Supprimer"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function EditInvoiceModal({ invoice, suppliers, onClose, onSave, loading, fmt }: {
-  invoice: any; suppliers: any[]; onClose: () => void; onSave: (p: any) => void; loading: boolean; fmt: (v: number) => string;
+function SupplierModal({ supplier, onClose, onSave, loading }: {
+  supplier: any; onClose: () => void; onSave: (p: any) => void; loading: boolean;
+}) {
+  const [form, setForm] = useState({
+    name: supplier?.name ?? "",
+    contactName: supplier?.contactName ?? "",
+    email: supplier?.email ?? "",
+    phone: supplier?.phone ?? "",
+    address: supplier?.address ?? "",
+    iban: supplier?.iban ?? "",
+    bic: supplier?.bic ?? "",
+    vatNumber: supplier?.vatNumber ?? "",
+    category: supplier?.category ?? "",
+    notes: supplier?.notes ?? "",
+  });
+  const submit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    onSave({
+      name: form.name,
+      contactName: form.contactName || null,
+      email: form.email || null,
+      phone: form.phone || null,
+      address: form.address || null,
+      iban: form.iban || null,
+      bic: form.bic || null,
+      vatNumber: form.vatNumber || null,
+      category: form.category || null,
+      notes: form.notes || null,
+    });
+  };
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-lg" onClick={(e) => e.stopPropagation()}>
+        <div className="space-between">
+          <div className="section-title">{supplier ? "Modifier le fournisseur" : "Nouveau fournisseur"}</div>
+          <button className="button secondary sm" onClick={onClose} aria-label="Fermer">×</button>
+        </div>
+        <form className="stack-sm" onSubmit={submit} style={{ marginTop: 16 }}>
+          <div className="grid grid-2">
+            <div><div className="label">Nom *</div><input className="input" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required minLength={2} /></div>
+            <div><div className="label">Personne contact</div><input className="input" value={form.contactName} onChange={(e) => setForm((f) => ({ ...f, contactName: e.target.value }))} /></div>
+          </div>
+          <div className="grid grid-2">
+            <div><div className="label">Email</div><input className="input" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} /></div>
+            <div><div className="label">Telephone</div><input className="input" type="tel" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} /></div>
+          </div>
+          <div><div className="label">Adresse</div><input className="input" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} placeholder="Rue, NPA, Ville, Pays" /></div>
+          <div className="grid grid-2">
+            <div><div className="label">IBAN</div><input className="input" value={form.iban} onChange={(e) => setForm((f) => ({ ...f, iban: e.target.value.toUpperCase().replace(/\s/g, "") }))} placeholder="CH12 3456..." /></div>
+            <div><div className="label">BIC / SWIFT</div><input className="input" value={form.bic} onChange={(e) => setForm((f) => ({ ...f, bic: e.target.value.toUpperCase() }))} /></div>
+          </div>
+          <div className="grid grid-2">
+            <div><div className="label">N° TVA</div><input className="input" value={form.vatNumber} onChange={(e) => setForm((f) => ({ ...f, vatNumber: e.target.value }))} placeholder="CHE-123.456.789" /></div>
+            <div><div className="label">Categorie</div><select className="select" value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}><option value="">-</option>{categories.map((c) => <option key={c} value={CATEGORY_LABELS[c]}>{CATEGORY_LABELS[c]}</option>)}</select></div>
+          </div>
+          <div><div className="label">Notes</div><textarea className="textarea" rows={2} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} maxLength={500} /></div>
+          <div className="row" style={{ marginTop: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="button secondary" onClick={onClose}>Annuler</button>
+            <button className="button" disabled={loading}>{loading ? "..." : "Enregistrer"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function UserModal({ user, onClose, onSave, loading }: {
+  user: any; onClose: () => void; onSave: (p: any) => void; loading: boolean;
+}) {
+  const [form, setForm] = useState({
+    email: user?.email ?? "",
+    fullName: user?.fullName ?? "",
+    role: user?.role ?? "MANAGER",
+    password: "",
+  });
+  const submit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const data: any = { email: form.email, fullName: form.fullName, role: form.role };
+    if (!user) data.password = form.password;
+    onSave(data);
+  };
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="space-between">
+          <div className="section-title">{user ? "Modifier l'utilisateur" : "Inviter un collaborateur"}</div>
+          <button className="button secondary sm" onClick={onClose} aria-label="Fermer">×</button>
+        </div>
+        <form className="stack-sm" onSubmit={submit} style={{ marginTop: 16 }}>
+          <div><div className="label">Nom complet *</div><input className="input" value={form.fullName} onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))} required minLength={2} /></div>
+          <div><div className="label">Email *</div><input className="input" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} required /></div>
+          <div>
+            <div className="label">Role *</div>
+            <select className="select" value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}>
+              <option value="ADMIN">Administrateur</option>
+              <option value="ACCOUNTING">Comptabilite</option>
+              <option value="MANAGER">Manager</option>
+            </select>
+          </div>
+          {!user && (
+            <div>
+              <div className="label">Mot de passe initial * (8 car. mini)</div>
+              <input className="input" type="password" value={form.password} onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} required minLength={8} autoComplete="new-password" />
+              <div className="tiny muted" style={{ marginTop: 4 }}>Communique-le en prive a la personne. Elle pourra le changer ensuite.</div>
+            </div>
+          )}
+          <div className="row" style={{ marginTop: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="button secondary" onClick={onClose}>Annuler</button>
+            <button className="button" disabled={loading}>{loading ? "..." : user ? "Enregistrer" : "Creer"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ResetPasswordModal({ user, onClose, onSave, loading }: {
+  user: any; onClose: () => void; onSave: (pwd: string) => void; loading: boolean;
+}) {
+  const [pwd, setPwd] = useState("");
+  const [show, setShow] = useState(false);
+  const generate = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+    let p = "";
+    for (let i = 0; i < 16; i++) p += chars[Math.floor(Math.random() * chars.length)];
+    setPwd(p); setShow(true);
+  };
+  const submit = (e: React.FormEvent<HTMLFormElement>) => { e.preventDefault(); onSave(pwd); };
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="space-between">
+          <div className="section-title">Reinitialiser le mot de passe</div>
+          <button className="button secondary sm" onClick={onClose} aria-label="Fermer">×</button>
+        </div>
+        <p className="small" style={{ marginTop: 8 }}>Nouveau mot de passe pour <strong>{user.fullName}</strong> ({user.email}).</p>
+        <form className="stack-sm" onSubmit={submit} style={{ marginTop: 12 }}>
+          <div>
+            <div className="label">Nouveau mot de passe (8 car. mini)</div>
+            <input className="input" type={show ? "text" : "password"} value={pwd} onChange={(e) => setPwd(e.target.value)} required minLength={8} />
+            <div className="row" style={{ marginTop: 6, gap: 8 }}>
+              <button type="button" className="button secondary sm" onClick={generate}>Generer</button>
+              <button type="button" className="button secondary sm" onClick={() => setShow((s) => !s)}>{show ? "Masquer" : "Afficher"}</button>
+              {show && pwd && <button type="button" className="button secondary sm" onClick={() => navigator.clipboard?.writeText(pwd)}>Copier</button>}
+            </div>
+          </div>
+          <div className="tiny muted">⚠ Note ce mot de passe, il ne sera plus visible apres validation.</div>
+          <div className="row" style={{ marginTop: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="button secondary" onClick={onClose}>Annuler</button>
+            <button className="button danger" disabled={loading || pwd.length < 8}>{loading ? "..." : "Reinitialiser"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function EditInvoiceModal({ invoice, suppliers, onClose, onSave, loading }: {
+  invoice: any; suppliers: any[]; onClose: () => void; onSave: (p: any) => void; loading: boolean;
 }) {
   const [form, setForm] = useState({
     reference: invoice.reference,
+    supplierReference: invoice.supplierReference ?? "",
     supplierName: invoice.supplier?.name ?? "",
     amount: String(invoice.amount),
     vatRate: String(invoice.vatRate ?? 0),
+    currency: invoice.currency ?? "CHF",
+    issueDate: invoice.issueDate ? invoice.issueDate.slice(0, 10) : "",
     dueDate: invoice.dueDate.slice(0, 10),
+    paymentMethod: invoice.paymentMethod ?? "",
     category: invoice.category,
     source: invoice.source,
     notes: invoice.notes ?? "",
@@ -801,15 +1264,20 @@ function EditInvoiceModal({ invoice, suppliers, onClose, onSave, loading, fmt }:
   const vatNum = Number(form.vatRate) || 0;
   const ht = vatNum > 0 ? amountNum / (1 + vatNum / 100) : amountNum;
   const tva = amountNum - ht;
+  const fmt = (v: number) => fmtCurrency(v, form.currency);
 
   const submit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     onSave({
       reference: form.reference,
+      supplierReference: form.supplierReference || null,
       supplierName: form.supplierName,
       amount: Number(form.amount),
       vatRate: Number(form.vatRate),
+      currency: form.currency,
+      issueDate: form.issueDate || null,
       dueDate: form.dueDate,
+      paymentMethod: form.paymentMethod || null,
       category: form.category,
       source: form.source,
       notes: form.notes || null,
@@ -825,28 +1293,39 @@ function EditInvoiceModal({ invoice, suppliers, onClose, onSave, loading, fmt }:
         </div>
         <form className="stack-sm" onSubmit={submit} style={{ marginTop: 16 }}>
           <div className="grid grid-2">
-            <div><div className="label">Reference</div><input className="input" value={form.reference} onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))} required /></div>
-            <div>
-              <div className="label">Fournisseur</div>
-              <input className="input" list="edit-supplier-list" value={form.supplierName} onChange={(e) => setForm((f) => ({ ...f, supplierName: e.target.value }))} required />
-              <datalist id="edit-supplier-list">{suppliers.map((s) => <option key={s.id} value={s.name} />)}</datalist>
-            </div>
+            <div><div className="label">Reference interne</div><input className="input" value={form.reference} onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))} required /></div>
+            <div><div className="label">N° facture fournisseur</div><input className="input" value={form.supplierReference} onChange={(e) => setForm((f) => ({ ...f, supplierReference: e.target.value }))} /></div>
+          </div>
+          <div>
+            <div className="label">Fournisseur</div>
+            <input className="input" list="edit-supplier-list" value={form.supplierName} onChange={(e) => setForm((f) => ({ ...f, supplierName: e.target.value }))} required />
+            <datalist id="edit-supplier-list">{suppliers.map((s) => <option key={s.id} value={s.name} />)}</datalist>
           </div>
           <div className="grid grid-3">
             <div><div className="label">Montant TTC</div><input className="input" type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} required /></div>
+            <div><div className="label">Devise</div><select className="select" value={form.currency} onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value }))}>{CURRENCIES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}</select></div>
             <div>
               <div className="label">Taux TVA</div>
               <select className="select" value={form.vatRate} onChange={(e) => setForm((f) => ({ ...f, vatRate: e.target.value }))}>
                 {VAT_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
               </select>
             </div>
-            <div><div className="label">Echeance</div><input className="input" type="date" value={form.dueDate} onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))} required /></div>
           </div>
           {amountNum > 0 && vatNum > 0 && (
-            <div className="tiny muted" style={{ background: "#f8fafc", padding: "8px 12px", borderRadius: 8 }}>
-              HT: <strong>{fmt(ht)}</strong> · TVA: <strong>{fmt(tva)}</strong> · TTC: <strong>{fmt(amountNum)}</strong>
+            <div className="tiny" style={{ background: "#f0f9ff", padding: "8px 12px", borderRadius: 8, border: "1px solid #bae6fd" }}>
+              HT : <strong>{fmt(ht)}</strong> · TVA : <strong>{fmt(tva)}</strong> · TTC : <strong>{fmt(amountNum)}</strong>
             </div>
           )}
+          <div className="grid grid-3">
+            <div><div className="label">Date d'emission</div><input className="input" type="date" value={form.issueDate} onChange={(e) => setForm((f) => ({ ...f, issueDate: e.target.value }))} /></div>
+            <div><div className="label">Date d'echeance</div><input className="input" type="date" value={form.dueDate} onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))} required /></div>
+            <div>
+              <div className="label">Mode de paiement</div>
+              <select className="select" value={form.paymentMethod} onChange={(e) => setForm((f) => ({ ...f, paymentMethod: e.target.value }))}>
+                {PAYMENT_METHODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </div>
+          </div>
           <div className="grid grid-2">
             <div><div className="label">Categorie</div><select className="select" value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}>{categories.map((c) => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}</select></div>
             <div><div className="label">Source</div><select className="select" value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))}>{sources.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>

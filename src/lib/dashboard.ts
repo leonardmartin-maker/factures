@@ -1,4 +1,4 @@
-import { listAuditLogs, getLatestBudget, listInvoices, listReminders, listSuppliers } from "@/lib/repositories";
+import { listAuditLogs, getLatestBudget, listInvoices, listReminders, listSuppliers, listUsers } from "@/lib/repositories";
 
 export type DashboardData = {
   stats: {
@@ -20,15 +20,17 @@ export type DashboardData = {
   reminders: Awaited<ReturnType<typeof listReminders>>;
   auditLogs: Awaited<ReturnType<typeof listAuditLogs>>;
   suppliers: Awaited<ReturnType<typeof listSuppliers>>;
+  users: Awaited<ReturnType<typeof listUsers>>;
 };
 
 export async function getDashboardData(): Promise<DashboardData> {
-  const [invoices, budget, reminders, auditLogs, suppliers] = await Promise.all([
+  const [invoices, budget, reminders, auditLogs, suppliers, users] = await Promise.all([
     listInvoices(),
     getLatestBudget(),
     listReminders(),
     listAuditLogs(),
     listSuppliers(),
+    listUsers(),
   ]);
 
   const now = new Date();
@@ -64,5 +66,6 @@ export async function getDashboardData(): Promise<DashboardData> {
     reminders,
     auditLogs,
     suppliers,
+    users,
   };
 }

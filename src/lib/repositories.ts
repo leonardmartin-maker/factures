@@ -1,11 +1,16 @@
+import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 
 type CreateInvoiceInput = {
-  reference: string;
+  reference?: string;
+  supplierReference?: string | null;
   supplierName: string;
   amount: number;
   vatRate?: number;
+  currency?: string;
+  issueDate?: string | null;
   dueDate: string;
+  paymentMethod?: string | null;
   category: string;
   source: string;
   notes?: string | null;
@@ -13,13 +18,37 @@ type CreateInvoiceInput = {
 
 type UpdateInvoiceInput = {
   reference?: string;
+  supplierReference?: string | null;
   supplierName?: string;
   amount?: number;
   vatRate?: number;
+  currency?: string;
+  issueDate?: string | null;
   dueDate?: string;
+  paymentMethod?: string | null;
   category?: string;
   source?: string;
   notes?: string | null;
+};
+
+type SupplierInput = {
+  name: string;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  iban?: string | null;
+  bic?: string | null;
+  contactName?: string | null;
+  vatNumber?: string | null;
+  notes?: string | null;
+  category?: string | null;
+};
+
+type UserInput = {
+  email: string;
+  fullName: string;
+  role: string;
+  password?: string;
 };
 
 function computeHt(amountTtc: number, vatRate: number) {
@@ -55,13 +84,16 @@ function serializeInvoice(invoice: any) {
   return {
     id: invoice.id,
     reference: invoice.reference,
+    supplierReference: invoice.supplierReference ?? null,
     amount: Number(invoice.amount),
     amountHt: invoice.amountHt !== null && invoice.amountHt !== undefined ? Number(invoice.amountHt) : null,
     vatRate: Number(invoice.vatRate ?? 0),
     vatAmount: invoice.vatAmount !== null && invoice.vatAmount !== undefined ? Number(invoice.vatAmount) : null,
     currency: invoice.currency,
+    issueDate: invoice.issueDate ? invoice.issueDate.toISOString() : null,
     dueDate: invoice.dueDate.toISOString(),
     paymentDate: invoice.paymentDate ? invoice.paymentDate.toISOString() : null,
+    paymentMethod: invoice.paymentMethod ?? null,
     status: invoice.status,
     category: invoice.category,
     source: invoice.source,
@@ -70,7 +102,13 @@ function serializeInvoice(invoice: any) {
     extractedByOcr: invoice.extractedByOcr,
     assignedTo: invoice.assignedToUser?.fullName ?? null,
     supplier: invoice.supplier
-      ? { id: invoice.supplier.id, name: invoice.supplier.name, email: invoice.supplier.email }
+      ? {
+          id: invoice.supplier.id,
+          name: invoice.supplier.name,
+          email: invoice.supplier.email,
+          iban: invoice.supplier.iban ?? null,
+          bic: invoice.supplier.bic ?? null,
+        }
       : null,
     documents: (invoice.documents ?? []).map((doc: any) => ({
       id: doc.id,
@@ -80,6 +118,23 @@ function serializeInvoice(invoice: any) {
       size: doc.originalSize,
     })),
   };
+}
+
+export async function getNextInvoiceReference(prefix = "FAC"): Promise<string> {
+  const year = new Date().getFullYear();
+  const key = `invoice_${year}`;
+  const counter = await prisma.counter.upsert({
+    where: { key },
+    create: { key, value: 1 },
+    update: { value: { increment: 1 } },
+  });
+  const number = String(counter.value).padStart(4, "0");
+  return `${prefix}-${year}-${number}`;
+}
+
+async function resolveInvoicePrefix(): Promise<string> {
+  const settings = await prisma.appSettings.findFirst();
+  return settings?.invoicePrefix || "FAC";
 }
 
 export async function listInvoices() {
@@ -98,15 +153,137 @@ export async function getInvoiceById(id: string) {
   return invoice ? serializeInvoice(invoice) : null;
 }
 
+function serializeSupplier(s: any) {
+  return {
+    id: s.id,
+    name: s.name,
+    email: s.email ?? null,
+    phone: s.phone ?? null,
+    address: s.address ?? null,
+    iban: s.iban ?? null,
+    bic: s.bic ?? null,
+    contactName: s.contactName ?? null,
+    vatNumber: s.vatNumber ?? null,
+    notes: s.notes ?? null,
+    category: s.category ?? null,
+  };
+}
+
 export async function listSuppliers() {
   const suppliers = await prisma.supplier.findMany({ orderBy: { name: "asc" } });
-  return suppliers.map((supplier) => ({
-    id: supplier.id,
-    name: supplier.name,
-    email: supplier.email,
-    phone: supplier.phone,
-    category: supplier.category,
-  }));
+  return suppliers.map(serializeSupplier);
+}
+
+export async function getSupplierById(id: string) {
+  const s = await prisma.supplier.findUnique({ where: { id } });
+  return s ? serializeSupplier(s) : null;
+}
+
+export async function createSupplier(input: SupplierInput, userId: string | null) {
+  const s = await prisma.supplier.create({
+    data: {
+      name: input.name,
+      email: input.email || null,
+      phone: input.phone || null,
+      address: input.address || null,
+      iban: input.iban || null,
+      bic: input.bic || null,
+      contactName: input.contactName || null,
+      vatNumber: input.vatNumber || null,
+      notes: input.notes || null,
+      category: input.category || null,
+    },
+  });
+  await addAuditLog(userId, null, "SUPPLIER_CREATED", `Fournisseur ${input.name} cree.`);
+  return serializeSupplier(s);
+}
+
+export async function updateSupplier(id: string, input: Partial<SupplierInput>, userId: string | null) {
+  const data: any = {};
+  if (input.name !== undefined) data.name = input.name;
+  if (input.email !== undefined) data.email = input.email || null;
+  if (input.phone !== undefined) data.phone = input.phone || null;
+  if (input.address !== undefined) data.address = input.address || null;
+  if (input.iban !== undefined) data.iban = input.iban || null;
+  if (input.bic !== undefined) data.bic = input.bic || null;
+  if (input.contactName !== undefined) data.contactName = input.contactName || null;
+  if (input.vatNumber !== undefined) data.vatNumber = input.vatNumber || null;
+  if (input.notes !== undefined) data.notes = input.notes || null;
+  if (input.category !== undefined) data.category = input.category || null;
+  const s = await prisma.supplier.update({ where: { id }, data });
+  await addAuditLog(userId, null, "SUPPLIER_UPDATED", `Fournisseur ${s.name} modifie.`);
+  return serializeSupplier(s);
+}
+
+export async function deleteSupplier(id: string, userId: string | null) {
+  const count = await prisma.invoice.count({ where: { supplierId: id } });
+  if (count > 0) throw new Error(`${count} facture(s) utilisent ce fournisseur. Impossible de supprimer.`);
+  const s = await prisma.supplier.delete({ where: { id } });
+  await addAuditLog(userId, null, "SUPPLIER_DELETED", `Fournisseur ${s.name} supprime.`);
+  return { ok: true };
+}
+
+// ============ USERS ============
+
+function serializeUser(u: any) {
+  return {
+    id: u.id,
+    email: u.email,
+    fullName: u.fullName,
+    role: u.role,
+    createdAt: u.createdAt.toISOString(),
+  };
+}
+
+export async function listUsers() {
+  const users = await prisma.user.findMany({ orderBy: { createdAt: "asc" } });
+  return users.map(serializeUser);
+}
+
+export async function createUser(input: UserInput, actorId: string | null) {
+  if (!input.password) throw new Error("Mot de passe requis");
+  const existing = await prisma.user.findUnique({ where: { email: input.email.toLowerCase() } });
+  if (existing) throw new Error("Cet email est deja utilise");
+  const passwordHash = await bcrypt.hash(input.password, 10);
+  const u = await prisma.user.create({
+    data: {
+      email: input.email.toLowerCase(),
+      fullName: input.fullName,
+      role: input.role,
+      passwordHash,
+    },
+  });
+  await addAuditLog(actorId, null, "USER_CREATED", `Utilisateur ${u.email} (${u.role}) cree.`);
+  return serializeUser(u);
+}
+
+export async function updateUser(id: string, input: Partial<UserInput>, actorId: string | null) {
+  const data: any = {};
+  if (input.email !== undefined) data.email = input.email.toLowerCase();
+  if (input.fullName !== undefined) data.fullName = input.fullName;
+  if (input.role !== undefined) data.role = input.role;
+  const u = await prisma.user.update({ where: { id }, data });
+  await addAuditLog(actorId, null, "USER_UPDATED", `Utilisateur ${u.email} modifie.`);
+  return serializeUser(u);
+}
+
+export async function resetUserPassword(id: string, newPassword: string, actorId: string | null) {
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  const u = await prisma.user.update({ where: { id }, data: { passwordHash } });
+  await addAuditLog(actorId, null, "USER_PASSWORD_RESET", `Mot de passe de ${u.email} reinitialise par un admin.`);
+  return serializeUser(u);
+}
+
+export async function deleteUser(id: string, actorId: string | null) {
+  if (id === actorId) throw new Error("Impossible de supprimer son propre compte");
+  const u = await prisma.user.findUnique({ where: { id } });
+  if (!u) throw new Error("Utilisateur introuvable");
+  // Detacher les factures assignees
+  await prisma.invoice.updateMany({ where: { assignedToUserId: id }, data: { assignedToUserId: null } });
+  await prisma.auditLog.updateMany({ where: { userId: id }, data: { userId: null } });
+  await prisma.user.delete({ where: { id } });
+  await addAuditLog(actorId, null, "USER_DELETED", `Utilisateur ${u.email} supprime.`);
+  return { ok: true };
 }
 
 export async function createInvoice(input: CreateInvoiceInput, userId: string | null) {
@@ -119,15 +296,26 @@ export async function createInvoice(input: CreateInvoiceInput, userId: string | 
   const vatRate = input.vatRate ?? 0;
   const { amountHt, vatAmount } = computeHt(input.amount, vatRate);
 
+  // Auto-numbering si pas de reference fournie
+  let reference = input.reference?.trim();
+  if (!reference) {
+    const prefix = await resolveInvoicePrefix();
+    reference = await getNextInvoiceReference(prefix);
+  }
+
   const invoice = await prisma.invoice.create({
     data: {
-      reference: input.reference,
+      reference,
+      supplierReference: input.supplierReference ?? null,
       supplierId: supplier.id,
       amount: input.amount,
       amountHt,
       vatRate,
       vatAmount,
+      currency: input.currency ?? "CHF",
+      issueDate: input.issueDate ? new Date(input.issueDate) : null,
       dueDate: new Date(input.dueDate),
+      paymentMethod: input.paymentMethod ?? null,
       status: "A_QUALIFIER",
       category: input.category,
       source: input.source,
@@ -137,7 +325,7 @@ export async function createInvoice(input: CreateInvoiceInput, userId: string | 
     include: { supplier: true, assignedToUser: true, documents: true },
   });
 
-  await addAuditLog(userId, invoice.id, "INVOICE_CREATED", `Facture ${input.reference} creee.`);
+  await addAuditLog(userId, invoice.id, "INVOICE_CREATED", `Facture ${reference} creee.`);
 
   return serializeInvoice(invoice);
 }
@@ -158,7 +346,11 @@ export async function updateInvoice(invoiceId: string, input: UpdateInvoiceInput
   }
 
   if (input.reference !== undefined) data.reference = input.reference;
+  if (input.supplierReference !== undefined) data.supplierReference = input.supplierReference;
+  if (input.currency !== undefined) data.currency = input.currency;
+  if (input.issueDate !== undefined) data.issueDate = input.issueDate ? new Date(input.issueDate) : null;
   if (input.dueDate !== undefined) data.dueDate = new Date(input.dueDate);
+  if (input.paymentMethod !== undefined) data.paymentMethod = input.paymentMethod;
   if (input.category !== undefined) data.category = input.category;
   if (input.source !== undefined) data.source = input.source;
   if (input.notes !== undefined) data.notes = input.notes;
