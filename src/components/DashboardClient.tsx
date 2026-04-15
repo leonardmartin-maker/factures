@@ -165,8 +165,17 @@ export default function DashboardClient({ initialData, session }: { initialData:
       {/* Mobile overlay */}
       <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
 
-      {/* Mobile menu button */}
-      <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)}>Menu</button>
+      {/* Mobile topbar */}
+      <header className="mobile-topbar">
+        <button className="mobile-menu-btn" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Menu">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="4" y1="6" x2="20" y2="6" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="18" x2="20" y2="18" />
+          </svg>
+        </button>
+        <div className="brand">Factures Pro</div>
+      </header>
 
       {/* Sidebar */}
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
@@ -281,17 +290,17 @@ export default function DashboardClient({ initialData, session }: { initialData:
                 <div className="section-title">Dernieres factures</div>
                 <button className="button secondary sm" onClick={() => setTab("factures")}>Voir tout</button>
               </div>
-              <div style={{ overflowX: "auto", marginTop: 12 }}>
+              <div className="table-responsive" style={{ marginTop: 12 }}>
                 <table className="table">
                   <thead><tr><th>Reference</th><th>Fournisseur</th><th>Montant</th><th>Echeance</th><th>Statut</th></tr></thead>
                   <tbody>
                     {data.invoices.slice(0, 5).map((inv) => (
                       <tr key={inv.id}>
-                        <td><strong>{inv.reference}</strong></td>
-                        <td>{inv.supplier.name}</td>
-                        <td style={{ fontWeight: 600 }}>{fmt(inv.amount)}</td>
-                        <td>{fmtDate(inv.dueDate)}</td>
-                        <td><span className={`status-pill ${STATUS_CLASS[inv.status] ?? ""}`}>{STATUS_LABELS[inv.status] ?? inv.status}</span></td>
+                        <td data-label="Reference"><strong>{inv.reference}</strong></td>
+                        <td data-label="Fournisseur">{inv.supplier.name}</td>
+                        <td data-label="Montant" style={{ fontWeight: 600 }}>{fmt(inv.amount)}</td>
+                        <td data-label="Echeance">{fmtDate(inv.dueDate)}</td>
+                        <td data-label="Statut"><span className={`status-pill ${STATUS_CLASS[inv.status] ?? ""}`}>{STATUS_LABELS[inv.status] ?? inv.status}</span></td>
                       </tr>
                     ))}
                   </tbody>
@@ -309,32 +318,32 @@ export default function DashboardClient({ initialData, session }: { initialData:
               <p className="subtitle">Workflow : qualifier, valider, payer, reporter, archiver</p>
             </div>
             <div className="row" style={{ gap: 12 }}>
-              <input className="input" style={{ maxWidth: 260 }} placeholder="Rechercher..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-              <select className="select" style={{ maxWidth: 180 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <input className="input" style={{ flex: "1 1 200px", maxWidth: 260 }} placeholder="Rechercher..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+              <select className="select" style={{ flex: "1 1 160px", maxWidth: 200 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <option value="ALL">Tous les statuts</option>
                 {statuses.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
               </select>
-              <div className="small muted">{filteredInvoices.length} facture(s)</div>
+              <div className="small muted" style={{ flexBasis: "100%" }}>{filteredInvoices.length} facture(s)</div>
             </div>
             <div className="card card-inner">
               <div className="label">Motif de report par defaut</div>
               <input className="input" value={postponeReason} onChange={(e) => setPostponeReason(e.target.value)} style={{ maxWidth: 420, marginBottom: 16 }} />
-              <div style={{ overflowX: "auto" }}>
+              <div className="table-responsive">
                 <table className="table">
                   <thead><tr><th>Reference</th><th>Fournisseur</th><th>Montant</th><th>Echeance</th><th>Statut</th><th>Categorie</th><th>Actions</th></tr></thead>
                   <tbody>
                     {filteredInvoices.map((inv) => (
                       <tr key={inv.id}>
-                        <td><strong style={{ fontSize: 14 }}>{inv.reference}</strong><div className="tiny muted">{inv.source} - {inv.assignedTo ?? "Non assignee"}</div></td>
-                        <td style={{ fontSize: 14 }}>{inv.supplier.name}</td>
-                        <td style={{ fontWeight: 600, fontSize: 14 }}>{fmt(inv.amount)}</td>
-                        <td style={{ fontSize: 14 }}>{fmtDate(inv.dueDate)}</td>
-                        <td>
+                        <td data-label="Reference"><strong style={{ fontSize: 14 }}>{inv.reference}</strong><div className="tiny muted">{inv.source} - {inv.assignedTo ?? "Non assignee"}</div></td>
+                        <td data-label="Fournisseur" style={{ fontSize: 14 }}>{inv.supplier.name}</td>
+                        <td data-label="Montant" style={{ fontWeight: 600, fontSize: 14 }}>{fmt(inv.amount)}</td>
+                        <td data-label="Echeance" style={{ fontSize: 14 }}>{fmtDate(inv.dueDate)}</td>
+                        <td data-label="Statut">
                           <span className={`status-pill ${STATUS_CLASS[inv.status] ?? ""}`}>{STATUS_LABELS[inv.status] ?? inv.status}</span>
                           {inv.postponeReason && <div className="tiny muted" style={{ marginTop: 6, maxWidth: 150 }}>{inv.postponeReason}</div>}
                         </td>
-                        <td><span className="badge gray">{CATEGORY_LABELS[inv.category] ?? inv.category}</span></td>
-                        <td>
+                        <td data-label="Categorie"><span className="badge gray">{CATEGORY_LABELS[inv.category] ?? inv.category}</span></td>
+                        <td className="td-actions">
                           <div className="row">
                             {inv.status !== "PAYEE" && inv.status !== "ARCHIVEE" && <button className="button success sm" onClick={() => payInvoice(inv.id)} disabled={loading === inv.id}>Payer</button>}
                             {!["REPORT_DEMANDE", "PAYEE", "ARCHIVEE"].includes(inv.status) && <button className="button warning sm" onClick={() => requestPostpone(inv.id)} disabled={loading === inv.id}>Reporter</button>}
@@ -434,18 +443,20 @@ export default function DashboardClient({ initialData, session }: { initialData:
               <p className="subtitle">Liste des fournisseurs enregistres</p>
             </div>
             <div className="card card-inner">
-              <table className="table">
-                <thead><tr><th>Nom</th><th>Email</th><th>Categorie</th></tr></thead>
-                <tbody>
-                  {data.suppliers.map((s) => (
-                    <tr key={s.id}>
-                      <td><strong>{s.name}</strong></td>
-                      <td className="muted">{s.email ?? "-"}</td>
-                      <td><span className="badge gray">{s.category ?? "-"}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-responsive">
+                <table className="table">
+                  <thead><tr><th>Nom</th><th>Email</th><th>Categorie</th></tr></thead>
+                  <tbody>
+                    {data.suppliers.map((s) => (
+                      <tr key={s.id}>
+                        <td data-label="Nom"><strong>{s.name}</strong></td>
+                        <td data-label="Email" className="muted">{s.email ?? "-"}</td>
+                        <td data-label="Categorie"><span className="badge gray">{s.category ?? "-"}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
